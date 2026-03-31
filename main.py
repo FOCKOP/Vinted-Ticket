@@ -470,7 +470,7 @@ class BoutonConfirmerCommande(discord.ui.View):
         await interaction.response.send_message(
             f"💳 **Instructions de paiement :**\n\n"
             f"Envoie **{self.prix}€** via PayPal / Lydia / Virement à :\n"
-            f"> `FR94 3000 2028 4100 0009 1155 S71
+            f"> `https://www.paypal.com/ncp/payment/UMQWU3A8V4V76`\n\n"
 `\n\n"
             f"Une fois le paiement effectué, clique sur le bouton ci-dessous pour le confirmer.",
             view=BoutonPaiementEffectue(self.jeu, self.rang_dep, self.rang_cib, self.pseudo, self.prix, self.temps),
