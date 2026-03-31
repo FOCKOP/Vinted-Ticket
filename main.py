@@ -465,20 +465,19 @@ class BoutonConfirmerCommande(discord.ui.View):
         self.prix = prix
         self.temps = temps
 
-    @discord.ui.button(label="✅ Confirmer et payer", style=discord.ButtonStyle.success)
-    async def confirmer(self, interaction: discord.Interaction, button: discord.ui.Button):
+@discord.ui.button(label="✅ Confirmer et payer", style=discord.ButtonStyle.success)
+async def confirmer(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_message(
             f"💳 **Instructions de paiement :**\n\n"
             f"Envoie **{self.prix}€** via PayPal / Lydia / Virement à :\n"
             f"> `https://www.paypal.com/ncp/payment/UMQWU3A8V4V76`\n\n"
-`\n\n"
             f"Une fois le paiement effectué, clique sur le bouton ci-dessous pour le confirmer.",
             view=BoutonPaiementEffectue(self.jeu, self.rang_dep, self.rang_cib, self.pseudo, self.prix, self.temps),
             ephemeral=True
         )
 
     @discord.ui.button(label="❌ Annuler", style=discord.ButtonStyle.danger)
-    async def annuler(self, interaction: discord.Interaction, button: discord.ui.Button):
+async def annuler(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_message("Commande annulée.", ephemeral=True)
 
 
