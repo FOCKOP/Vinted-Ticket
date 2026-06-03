@@ -17,9 +17,19 @@ from reportlab.lib.units import cm
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, HRFlowable
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER, TA_RIGHT, TA_LEFT
-from dotenv import load_dotenv
 
-load_dotenv()
+def _load_env(path=".env"):
+    if not os.path.exists(path):
+        return
+    with open(path, "r", encoding="utf-8-sig") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            os.environ.setdefault(key.strip(), value.strip())
+
+_load_env()
 
 # ─────────────────────────────────────────
 #  CONFIGURATION
@@ -27,19 +37,17 @@ load_dotenv()
 TOKEN        = os.getenv("TOKEN")
 SMTP_HOST    = os.getenv("SMTP_HOST", "smtp.gmail.com")
 SMTP_PORT    = int(os.getenv("SMTP_PORT", "587"))
-SMTP_USER    = os.getenv("SMTP_USER")    # ton adresse email expéditeur
-SMTP_PASS    = os.getenv("SMTP_PASS")    # mot de passe app Gmail (ou autre)
+SMTP_USER    = os.getenv("SMTP_USER", "")
+SMTP_PASS    = os.getenv("SMTP_PASS", "")
 GUILD_ID     = int(os.getenv("GUILD_ID", "0"))
 
 # ─────────────────────────────────────────
 #  BOT SETUP
 # ─────────────────────────────────────────
 intents = discord.Intents.default()
-intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 tree = bot.tree
 
-# Sessions actives : user_id -> dict avec les données collectées
 sessions: dict[int, dict] = {}
 
 
@@ -96,7 +104,6 @@ def generer_ticket(data: dict) -> bytes:
 
     elems = []
 
-    # En-tête
     elems.append(Paragraph(data["marque"].upper(), bold_center))
     elems.append(Spacer(1, 3))
     elems.append(HRFlowable(width="100%", thickness=1, color=colors.black))
@@ -110,7 +117,6 @@ def generer_ticket(data: dict) -> bytes:
     elems.append(HRFlowable(width="100%", thickness=0.5, color=colors.grey))
     elems.append(Spacer(1, 5))
 
-    # Articles
     table_data = [["Article", "Qté", "P.U.", "Total"]]
     total_ttc = 0.0
     for art in data["articles"]:
@@ -183,7 +189,6 @@ def generer_facture(data: dict) -> bytes:
 
     elems = []
 
-    # En-tête
     header_data = [
         [Paragraph(data["marque"].upper(), titre_style), ""],
         [Paragraph(data.get("adresse_emetteur", ""), normal),
@@ -199,7 +204,6 @@ def generer_facture(data: dict) -> bytes:
     elems.append(header_table)
     elems.append(Spacer(1, 20))
 
-    # Infos client
     elems.append(Paragraph("Facturé à :", h2))
     elems.append(Spacer(1, 4))
     client_data = [
@@ -220,7 +224,6 @@ def generer_facture(data: dict) -> bytes:
     elems.append(client_table)
     elems.append(Spacer(1, 20))
 
-    # Tableau articles
     elems.append(Paragraph("Détail des prestations", h2))
     elems.append(Spacer(1, 6))
 
@@ -255,7 +258,6 @@ def generer_facture(data: dict) -> bytes:
     elems.append(t)
     elems.append(Spacer(1, 15))
 
-    # Totaux
     tva_rate = data.get("tva", 20.0)
     ht = total_ttc / (1 + tva_rate / 100)
     tva_montant = total_ttc - ht
@@ -278,7 +280,6 @@ def generer_facture(data: dict) -> bytes:
     ]))
     elems.append(totaux)
 
-    # Mentions légales
     elems.append(Spacer(1, 30))
     elems.append(HRFlowable(width="100%", thickness=0.5, color=colors.grey))
     elems.append(Spacer(1, 6))
@@ -398,7 +399,7 @@ class ModalInfosFacture(discord.ui.Modal, title="Informations — Facture"):
 
 
 # ─────────────────────────────────────────
-#  VIEW ARTICLES (boutons après chaque article)
+#  VIEW ARTICLES
 # ─────────────────────────────────────────
 
 class ViewArticles(discord.ui.View):
@@ -443,10 +444,8 @@ class ViewArticles(discord.ui.View):
                     f"Cordialement,\n{data['marque']}"
                 )
 
-            # Envoyer l'email
             email_ok = envoyer_email(data["email"], sujet, corps, pdf_bytes, nom_fichier)
 
-            # Envoyer le PDF aussi dans Discord (en DM)
             discord_file = discord.File(io.BytesIO(pdf_bytes), filename=nom_fichier)
             try:
                 await interaction.user.send(
@@ -487,7 +486,7 @@ class ViewArticles(discord.ui.View):
 
 
 # ─────────────────────────────────────────
-#  VUE PRINCIPALE — choix ticket ou facture
+#  VUE PRINCIPALE
 # ─────────────────────────────────────────
 
 class ViewChoix(discord.ui.View):
