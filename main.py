@@ -21,6 +21,8 @@ from reportlab.graphics.barcode import code128
 
 def _load_env(path=".env"):
     if not os.path.exists(path):
+        path = ".env.example"
+    if not os.path.exists(path):
         return
     with open(path, "r", encoding="utf-8-sig") as f:
         for line in f:
@@ -32,9 +34,6 @@ def _load_env(path=".env"):
 
 _load_env()
 
-# ─────────────────────────────────────────
-#  CONFIGURATION
-# ─────────────────────────────────────────
 TOKEN        = os.getenv("TOKEN")
 SMTP_HOST    = os.getenv("SMTP_HOST", "smtp.gmail.com")
 SMTP_PORT    = int(os.getenv("SMTP_PORT", "587"))
@@ -42,9 +41,6 @@ SMTP_USER    = os.getenv("SMTP_USER", "")
 SMTP_PASS    = os.getenv("SMTP_PASS", "")
 GUILD_ID     = int(os.getenv("GUILD_ID", "0"))
 
-# ─────────────────────────────────────────
-#  BOT SETUP
-# ─────────────────────────────────────────
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
 tree = bot.tree
@@ -52,9 +48,6 @@ tree = bot.tree
 sessions: dict[int, dict] = {}
 
 
-# ─────────────────────────────────────────
-#  UTILITAIRES
-# ─────────────────────────────────────────
 def gen_numero() -> str:
     return "".join(random.choices(string.digits, k=8))
 
@@ -84,9 +77,6 @@ def envoyer_email(destinataire: str, sujet: str, corps: str, pdf_bytes: bytes, n
         return False
 
 
-# ─────────────────────────────────────────
-#  STYLES DE TICKETS (header uniquement)
-# ─────────────────────────────────────────
 TICKET_STYLES = {
     "luxe": {
         "label":       "💎 Luxe (LV, Chanel, Dior…)",
@@ -109,9 +99,6 @@ TICKET_STYLES = {
 }
 
 
-# ─────────────────────────────────────────
-#  GÉNÉRATION PDF — TICKET DE CAISSE
-# ─────────────────────────────────────────
 def _spaced(text: str) -> str:
     return "  ".join(text.upper())
 
@@ -149,7 +136,6 @@ def generer_ticket(data: dict) -> bytes:
 
     elems = []
 
-    # ── NOM DE MARQUE ───────────────────────
     nom = _spaced(data["marque"]) if s["spacing"] else data["marque"].upper()
     elems.append(p(nom, font=s["header_font"], size=s["header_sz"], align=TA_CENTER))
     elems.append(Spacer(1, 3))
@@ -160,7 +146,6 @@ def generer_ticket(data: dict) -> bytes:
     elems.append(sep("-"))
     elems.append(Spacer(1, 4))
 
-    # ── INFOS TRANSACTION ─────────────────────
     store_num  = "".join(random.choices(string.digits, k=5))
     reg_num    = "".join(random.choices(string.digits, k=2))
     cashier    = "".join(random.choices(string.ascii_uppercase, k=5))
@@ -184,11 +169,9 @@ def generer_ticket(data: dict) -> bytes:
     elems.append(sep("-"))
     elems.append(Spacer(1, 3))
 
-    # ── EN-TÊTE ARTICLES ──────────────────────
     elems.append(p("ARTICLE          QTE  PRIX    MONTANT", BODY_B))
     elems.append(sep("-"))
 
-    # ── ARTICLES ───────────────────────────────
     total_ttc = 0.0
     for art in data["articles"]:
         code_art = "".join(random.choices(string.digits, k=9))
@@ -203,7 +186,6 @@ def generer_ticket(data: dict) -> bytes:
     elems.append(Spacer(1, 4))
     elems.append(sep("-"))
 
-    # ── TOTAUX ──────────────────────────────────
     ht  = total_ttc / (1 + tva_rate / 100)
     tva = total_ttc - ht
     mode = data.get("paiement", "Carte bancaire")
@@ -232,7 +214,6 @@ def generer_ticket(data: dict) -> bytes:
     elems.append(Spacer(1, 4))
     elems.append(sep("-"))
 
-    # ── PAIEMENT ────────────────────────────────
     pmt = Table([
         [p(mode.upper(), BODY_B), p(f"EUR  {total_ttc:.2f}", BODY_B, align=TA_RIGHT)],
         [p("MONNAIE RENDUE"),     p("EUR   0.00", align=TA_RIGHT)],
@@ -246,7 +227,6 @@ def generer_ticket(data: dict) -> bytes:
     elems.append(Spacer(1, 4))
     elems.append(sep("-"))
 
-    # ── INFOS FINALES ─────────────────────────
     nb = len(data["articles"])
     elems.append(Spacer(1, 3))
     elems.append(p(f"NOMBRE D'ARTICLES VENDUS = {nb}"))
@@ -260,7 +240,6 @@ def generer_ticket(data: dict) -> bytes:
     elems.append(p("conformement a mon accord porteur de carte.", align=TA_CENTER))
     elems.append(Spacer(1, 10))
 
-    # ── CODE-BARRES pleine largeur ──────────────
     barcode_val = "".join(random.choices(string.digits + string.ascii_uppercase, k=12))
     try:
         bc_ref = code128.Code128(barcode_val, barHeight=1.5*cm, barWidth=1.0, humanReadable=False)
@@ -276,9 +255,6 @@ def generer_ticket(data: dict) -> bytes:
     return buf.getvalue()
 
 
-# ─────────────────────────────────────────
-#  GÉNÉRATION PDF — FACTURE
-# ─────────────────────────────────────────
 def generer_facture(data: dict) -> bytes:
     buf = io.BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=A4, rightMargin=2*cm, leftMargin=2*cm,
@@ -464,10 +440,6 @@ def generer_facture(data: dict) -> bytes:
     return buf.getvalue()
 
 
-# ─────────────────────────────────────────
-#  MODALS
-# ─────────────────────────────────────────
-
 class ModalArticle(discord.ui.Modal, title="Ajouter un article"):
     nom_article = discord.ui.TextInput(label="Nom de l'article", placeholder="Ex: Chemise bleue")
     quantite    = discord.ui.TextInput(label="Quantité", placeholder="1", default="1", max_length=4)
@@ -483,9 +455,7 @@ class ModalArticle(discord.ui.Modal, title="Ajouter un article"):
             qte = int(self.quantite.value)
             prix = float(self.prix_ht.value.replace(",", "."))
         except ValueError:
-            await interaction.response.send_message(
-                "❌ Quantité ou prix invalide.", ephemeral=True
-            )
+            await interaction.response.send_message("❌ Quantité ou prix invalide.", ephemeral=True)
             return
 
         sessions[uid]["articles"].append({
@@ -597,10 +567,6 @@ class ModalInfosFacture(discord.ui.Modal, title="Informations — Facture"):
         )
 
 
-# ─────────────────────────────────────────
-#  VIEW ARTICLES
-# ─────────────────────────────────────────
-
 class ViewArticles(discord.ui.View):
     def __init__(self, type_doc: str):
         super().__init__(timeout=600)
@@ -616,9 +582,7 @@ class ViewArticles(discord.ui.View):
         data = sessions.get(uid)
 
         if not data or not data["articles"]:
-            await interaction.response.send_message(
-                "❌ Aucun article ajouté.", ephemeral=True
-            )
+            await interaction.response.send_message("❌ Aucun article ajouté.", ephemeral=True)
             return
 
         await interaction.response.defer(ephemeral=True, thinking=True)
@@ -684,10 +648,6 @@ class ViewArticles(discord.ui.View):
         await interaction.response.send_message("❌ Opération annulée.", ephemeral=True)
 
 
-# ─────────────────────────────────────────
-#  SÉLECTION DU STYLE DE TICKET
-# ─────────────────────────────────────────
-
 class ViewStyleTicket(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=120)
@@ -704,10 +664,6 @@ class ViewStyleTicket(discord.ui.View):
     async def restaurant(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(ModalInfosTicket("restaurant"))
 
-
-# ─────────────────────────────────────────
-#  VUE PRINCIPALE
-# ─────────────────────────────────────────
 
 class ViewChoix(discord.ui.View):
     def __init__(self):
@@ -728,10 +684,6 @@ class ViewChoix(discord.ui.View):
     async def facture(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(ModalInfosFacture())
 
-
-# ─────────────────────────────────────────
-#  COMMANDES SLASH
-# ─────────────────────────────────────────
 
 @tree.command(name="documents", description="Crée un ticket de caisse ou une facture et l'envoie par email")
 async def documents(interaction: discord.Interaction):
@@ -767,10 +719,6 @@ async def setup_documents(interaction: discord.Interaction):
     await interaction.response.send_message("✅ Panneau posté !", ephemeral=True)
 
 
-# ─────────────────────────────────────────
-#  EVENTS
-# ─────────────────────────────────────────
-
 @bot.event
 async def on_ready():
     print(f"✅ Bot connecté : {bot.user}")
@@ -785,7 +733,4 @@ async def on_ready():
         print("✅ Commandes slash synchronisées (global).")
 
 
-# ─────────────────────────────────────────
-#  LANCEMENT
-# ─────────────────────────────────────────
 bot.run(TOKEN)
