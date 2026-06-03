@@ -34,6 +34,9 @@ def _load_env(path=".env"):
 
 _load_env()
 
+# ─────────────────────────────────────────
+#  CONFIGURATION
+# ─────────────────────────────────────────
 TOKEN        = os.getenv("TOKEN")
 SMTP_HOST    = os.getenv("SMTP_HOST", "smtp.gmail.com")
 SMTP_PORT    = int(os.getenv("SMTP_PORT", "587"))
@@ -41,6 +44,9 @@ SMTP_USER    = os.getenv("SMTP_USER", "")
 SMTP_PASS    = os.getenv("SMTP_PASS", "")
 GUILD_ID     = int(os.getenv("GUILD_ID", "0"))
 
+# ─────────────────────────────────────────
+#  BOT SETUP
+# ─────────────────────────────────────────
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
 tree = bot.tree
@@ -48,6 +54,9 @@ tree = bot.tree
 sessions: dict[int, dict] = {}
 
 
+# ─────────────────────────────────────────
+#  UTILITAIRES
+# ─────────────────────────────────────────
 def gen_numero() -> str:
     return "".join(random.choices(string.digits, k=8))
 
@@ -77,6 +86,9 @@ def envoyer_email(destinataire: str, sujet: str, corps: str, pdf_bytes: bytes, n
         return False
 
 
+# ─────────────────────────────────────────
+#  STYLES DE TICKETS (header uniquement)
+# ─────────────────────────────────────────
 TICKET_STYLES = {
     "luxe": {
         "label":       "💎 Luxe (LV, Chanel, Dior…)",
@@ -99,6 +111,9 @@ TICKET_STYLES = {
 }
 
 
+# ─────────────────────────────────────────
+#  GÉNÉRATION PDF — TICKET DE CAISSE
+# ─────────────────────────────────────────
 def _spaced(text: str) -> str:
     return "  ".join(text.upper())
 
@@ -136,6 +151,7 @@ def generer_ticket(data: dict) -> bytes:
 
     elems = []
 
+    # ── NOM DE MARQUE ───────────────────────
     nom = _spaced(data["marque"]) if s["spacing"] else data["marque"].upper()
     elems.append(p(nom, font=s["header_font"], size=s["header_sz"], align=TA_CENTER))
     elems.append(Spacer(1, 3))
@@ -146,6 +162,7 @@ def generer_ticket(data: dict) -> bytes:
     elems.append(sep("-"))
     elems.append(Spacer(1, 4))
 
+    # ── INFOS TRANSACTION ─────────────────────
     store_num  = "".join(random.choices(string.digits, k=5))
     reg_num    = "".join(random.choices(string.digits, k=2))
     cashier    = "".join(random.choices(string.ascii_uppercase, k=5))
@@ -169,9 +186,11 @@ def generer_ticket(data: dict) -> bytes:
     elems.append(sep("-"))
     elems.append(Spacer(1, 3))
 
+    # ── EN-TÊTE ARTICLES ────────────────────
     elems.append(p("ARTICLE          QTE  PRIX    MONTANT", BODY_B))
     elems.append(sep("-"))
 
+    # ── ARTICLES ──────────────────────────
     total_ttc = 0.0
     for art in data["articles"]:
         code_art = "".join(random.choices(string.digits, k=9))
@@ -186,6 +205,7 @@ def generer_ticket(data: dict) -> bytes:
     elems.append(Spacer(1, 4))
     elems.append(sep("-"))
 
+    # ── TOTAUX ────────────────────────────
     ht  = total_ttc / (1 + tva_rate / 100)
     tva = total_ttc - ht
     mode = data.get("paiement", "Carte bancaire")
@@ -214,6 +234,7 @@ def generer_ticket(data: dict) -> bytes:
     elems.append(Spacer(1, 4))
     elems.append(sep("-"))
 
+    # ── PAIEMENT ──────────────────────────
     pmt = Table([
         [p(mode.upper(), BODY_B), p(f"EUR  {total_ttc:.2f}", BODY_B, align=TA_RIGHT)],
         [p("MONNAIE RENDUE"),     p("EUR   0.00", align=TA_RIGHT)],
@@ -227,6 +248,7 @@ def generer_ticket(data: dict) -> bytes:
     elems.append(Spacer(1, 4))
     elems.append(sep("-"))
 
+    # ── INFOS FINALES ─────────────────────
     nb = len(data["articles"])
     elems.append(Spacer(1, 3))
     elems.append(p(f"NOMBRE D'ARTICLES VENDUS = {nb}"))
@@ -240,6 +262,7 @@ def generer_ticket(data: dict) -> bytes:
     elems.append(p("conformement a mon accord porteur de carte.", align=TA_CENTER))
     elems.append(Spacer(1, 10))
 
+    # ── CODE-BARRES pleine largeur ────────────
     barcode_val = "".join(random.choices(string.digits + string.ascii_uppercase, k=12))
     try:
         bc_ref = code128.Code128(barcode_val, barHeight=1.5*cm, barWidth=1.0, humanReadable=False)
@@ -255,16 +278,18 @@ def generer_ticket(data: dict) -> bytes:
     return buf.getvalue()
 
 
+# ─────────────────────────────────────────
+#  GÉNÉRATION PDF — FACTURE
+# ─────────────────────────────────────────
 def generer_facture(data: dict) -> bytes:
     buf = io.BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=A4, rightMargin=2*cm, leftMargin=2*cm,
-                             topMargin=2*cm, bottomMargin=2*cm)
+                             topMargin=1.5*cm, bottomMargin=1.5*cm)
 
-    C = colors.HexColor("#1B2A4A")
-    C2 = colors.HexColor("#F0F4FA")
-
-    styles = getSampleStyleSheet()
-    N = styles["Normal"]
+    C    = colors.HexColor("#1B2A4A")   # bleu marine principal
+    C2   = colors.HexColor("#F0F4FA")   # fond léger
+    CGREY = colors.HexColor("#6B7280")
+    CBORDER = colors.HexColor("#D1D5DB")
 
     def fp(name, font="Helvetica", size=9, align=TA_LEFT, color=colors.black, leading=None):
         return ParagraphStyle(name, fontName=font, fontSize=size, alignment=align,
@@ -274,27 +299,73 @@ def generer_facture(data: dict) -> bytes:
     now = datetime.now()
     W = 17 * cm
 
-    brand_cell = Table(
-        [[Paragraph(data["marque"].upper(), fp("b1","Helvetica-Bold",20,TA_LEFT,colors.white)),
-          Paragraph(f"<b>FACTURE</b><br/>N° {data['numero']}", fp("b2","Helvetica-Bold",12,TA_RIGHT,colors.white))]],
-        colWidths=[W*0.6, W*0.4]
-    )
-    brand_cell.setStyle(TableStyle([
-        ("BACKGROUND", (0,0),(-1,-1), C),
-        ("TOPPADDING",    (0,0),(-1,-1), 14),
-        ("BOTTOMPADDING", (0,0),(-1,-1), 14),
-        ("LEFTPADDING",   (0,0),(0,-1), 12),
-        ("RIGHTPADDING",  (1,0),(1,-1), 12),
-        ("VALIGN", (0,0),(-1,-1), "MIDDLE"),
-    ]))
-    elems.append(brand_cell)
-    elems.append(Spacer(1, 12))
-
     adr_emetteur = data.get("adresse_emetteur", "")
-    siret = data.get("siret", "")
-    tva_intra = data.get("tva_intra", "")
-    date_str = now.strftime("%d/%m/%Y")
-    echeance = data.get("echeance", "30 jours")
+    siret        = data.get("siret", "")
+    tva_intra    = data.get("tva_intra", "")
+    echeance     = data.get("echeance", "30 jours")
+    mode         = data.get("paiement", "Virement bancaire")
+    date_str     = now.strftime("%d/%m/%Y")
+    numero       = data["numero"]
+
+    # ── BANDE ENTÊTE ────────────────────────────────────
+    left_content = [
+        Paragraph(data["marque"].upper(),
+                  fp("h1", "Helvetica-Bold", 22, TA_LEFT, colors.white)),
+    ]
+    if adr_emetteur:
+        left_content.append(Spacer(1, 3))
+        left_content.append(Paragraph(adr_emetteur,
+                  fp("ha", "Helvetica", 8, TA_LEFT, colors.HexColor("#BFD0E8"))))
+    if siret:
+        left_content.append(Paragraph(f"SIRET : {siret}",
+                  fp("hs", "Helvetica", 7, TA_LEFT, colors.HexColor("#BFD0E8"))))
+    if tva_intra:
+        left_content.append(Paragraph(f"N° TVA : {tva_intra}",
+                  fp("ht", "Helvetica", 7, TA_LEFT, colors.HexColor("#BFD0E8"))))
+
+    right_content = [
+        Paragraph("FACTURE", fp("fac", "Helvetica-Bold", 28, TA_RIGHT, colors.white)),
+        Spacer(1, 4),
+        Paragraph(f"N° {numero}",
+                  fp("fn", "Helvetica-Bold", 10, TA_RIGHT, colors.HexColor("#BFD0E8"))),
+        Paragraph(f"Date : {date_str}",
+                  fp("fd", "Helvetica", 8, TA_RIGHT, colors.HexColor("#BFD0E8"))),
+        Paragraph(f"Échéance : {echeance}",
+                  fp("fe", "Helvetica", 8, TA_RIGHT, colors.HexColor("#BFD0E8"))),
+    ]
+
+    from reportlab.platypus import KeepInFrame
+    header_tbl = Table(
+        [[left_content, right_content]],
+        colWidths=[W * 0.55, W * 0.45]
+    )
+    header_tbl.setStyle(TableStyle([
+        ("BACKGROUND",    (0,0),(-1,-1), C),
+        ("VALIGN",        (0,0),(-1,-1), "MIDDLE"),
+        ("TOPPADDING",    (0,0),(-1,-1), 16),
+        ("BOTTOMPADDING", (0,0),(-1,-1), 16),
+        ("LEFTPADDING",   (0,0),(0,-1),  14),
+        ("RIGHTPADDING",  (1,0),(1,-1),  14),
+    ]))
+    elems.append(header_tbl)
+    elems.append(Spacer(1, 14))
+
+    # ── ÉMETTEUR / DESTINATAIRE ─────────────────────────
+    def info_block(titre, lignes):
+        inner = [Paragraph(titre, fp("it", "Helvetica-Bold", 7, color=C))]
+        for l in lignes:
+            if l:
+                inner.append(Paragraph(l, fp("il", size=8, leading=11)))
+        tbl = Table([[inner]], colWidths=[W * 0.44])
+        tbl.setStyle(TableStyle([
+            ("BACKGROUND",    (0,0),(-1,0), C2),
+            ("TOPPADDING",    (0,0),(-1,-1), 4),
+            ("BOTTOMPADDING", (0,0),(-1,-1), 4),
+            ("LEFTPADDING",   (0,0),(-1,-1), 7),
+            ("RIGHTPADDING",  (0,0),(-1,-1), 7),
+            ("BOX",           (0,0),(-1,-1), 0.5, CBORDER),
+        ]))
+        return tbl
 
     emetteur_lines = [data["marque"]]
     if adr_emetteur:
@@ -307,138 +378,172 @@ def generer_facture(data: dict) -> bytes:
     client_lines = [f"{data['prenom']} {data['nom'].upper()}"]
     if data.get("adresse_client"):
         client_lines.append(data["adresse_client"])
-    client_lines.append(data.get("email", ""))
+    if data.get("email"):
+        client_lines.append(data["email"])
 
-    def info_block(titre, lignes, couleur_titre=C):
-        rows = [[Paragraph(titre, fp("t", "Helvetica-Bold", 8, color=couleur_titre))]]
-        for l in lignes:
-            if l:
-                rows.append([Paragraph(l, fp("l", size=8))])
-        tbl = Table(rows, colWidths=[W*0.45])
-        tbl.setStyle(TableStyle([
-            ("BACKGROUND", (0,0),(0,0), C2),
-            ("TOPPADDING",    (0,0),(-1,-1), 3),
-            ("BOTTOMPADDING", (0,0),(-1,-1), 3),
-            ("LEFTPADDING",   (0,0),(-1,-1), 6),
-            ("BOX", (0,0),(-1,-1), 0.5, colors.HexColor("#CCCCCC")),
-        ]))
-        return tbl
-
-    meta_rows = [
-        ["Date d'émission :", date_str],
-        ["Échéance :", echeance],
-    ]
-    meta_tbl = Table(meta_rows, colWidths=[W*0.18, W*0.2])
-    meta_tbl.setStyle(TableStyle([
-        ("FONTNAME", (0,0),(0,-1), "Helvetica-Bold"),
-        ("FONTSIZE", (0,0),(-1,-1), 8),
-        ("TEXTCOLOR",(0,0),(0,-1), colors.HexColor("#555555")),
-        ("TOPPADDING",    (0,0),(-1,-1), 2),
-        ("BOTTOMPADDING", (0,0),(-1,-1), 2),
-    ]))
-
-    header2 = Table(
-        [[info_block("ÉMETTEUR", emetteur_lines),
-          "",
-          info_block("FACTURÉ À", client_lines)]],
-        colWidths=[W*0.45, W*0.1, W*0.45]
+    addr_row = Table(
+        [[info_block("DE", emetteur_lines), "", info_block("FACTURÉ À", client_lines)]],
+        colWidths=[W * 0.44, W * 0.12, W * 0.44]
     )
-    header2.setStyle(TableStyle([("VALIGN",(0,0),(-1,-1),"TOP")]))
-    elems.append(header2)
-    elems.append(Spacer(1, 6))
-    elems.append(meta_tbl)
-    elems.append(Spacer(1, 16))
+    addr_row.setStyle(TableStyle([("VALIGN", (0,0),(-1,-1), "TOP")]))
+    elems.append(addr_row)
+    elems.append(Spacer(1, 18))
 
-    art_header = ["Description", "Qté", "P.U. HT", "TVA", "Total TTC"]
+    # ── TABLEAU ARTICLES ──────────────────────────────
+    art_header = ["Description", "Qté", "P.U. HT", "TVA", "Total HT", "Total TTC"]
     rows = [art_header]
-    total_ht_global = 0.0
+    total_ht_global  = 0.0
     total_tva_global = 0.0
     total_ttc_global = 0.0
+    tva_details: dict[float, float] = {}
 
     for art in data["articles"]:
-        tva_r = art.get("tva", data.get("tva", 20.0))
-        pu_ht = art["prix_unitaire"]
-        qte = art["quantite"]
+        tva_r    = art.get("tva", data.get("tva", 20.0))
+        pu_ht    = art["prix_unitaire"]
+        qte      = art["quantite"]
         ligne_ht = qte * pu_ht
         ligne_tva = ligne_ht * tva_r / 100
         ligne_ttc = ligne_ht + ligne_tva
         total_ht_global  += ligne_ht
         total_tva_global += ligne_tva
         total_ttc_global += ligne_ttc
+        tva_details[tva_r] = tva_details.get(tva_r, 0.0) + ligne_tva
         rows.append([
             art["nom"], str(qte),
             f"{pu_ht:.2f} €", f"{tva_r:.0f}%",
-            f"{ligne_ttc:.2f} €",
+            f"{ligne_ht:.2f} €", f"{ligne_ttc:.2f} €",
         ])
 
-    col_w = [W*0.38, W*0.08, W*0.18, W*0.1, W*0.18]
+    col_w = [W*0.34, W*0.07, W*0.15, W*0.08, W*0.16, W*0.16]
     art_tbl = Table(rows, colWidths=col_w, repeatRows=1)
     art_tbl.setStyle(TableStyle([
-        ("BACKGROUND",   (0,0),(-1,0),  C),
-        ("TEXTCOLOR",    (0,0),(-1,0),  colors.white),
-        ("FONTNAME",     (0,0),(-1,0),  "Helvetica-Bold"),
-        ("FONTSIZE",     (0,0),(-1,-1), 9),
-        ("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.white, C2]),
-        ("ALIGN",        (1,0),(-1,-1), "RIGHT"),
-        ("TOPPADDING",   (0,0),(-1,-1), 5),
-        ("BOTTOMPADDING",(0,0),(-1,-1), 5),
-        ("LEFTPADDING",  (0,0),(0,-1),  6),
-        ("LINEBELOW",    (0,-1),(-1,-1), 0.5, colors.HexColor("#CCCCCC")),
-        ("LINEBELOW",    (0,0),(-1,0),   0, colors.white),
+        ("BACKGROUND",    (0,0),(-1,0),  C),
+        ("TEXTCOLOR",     (0,0),(-1,0),  colors.white),
+        ("FONTNAME",      (0,0),(-1,0),  "Helvetica-Bold"),
+        ("FONTSIZE",      (0,0),(-1,-1), 8),
+        ("ROWBACKGROUNDS",(0,1),(-1,-1), [colors.white, C2]),
+        ("ALIGN",         (1,0),(-1,-1), "RIGHT"),
+        ("ALIGN",         (0,0),(0,-1),  "LEFT"),
+        ("TOPPADDING",    (0,0),(-1,-1), 5),
+        ("BOTTOMPADDING", (0,0),(-1,-1), 5),
+        ("LEFTPADDING",   (0,0),(0,-1),  7),
+        ("RIGHTPADDING",  (-1,0),(-1,-1), 7),
+        ("LINEBELOW",     (0,-1),(-1,-1), 0.5, CBORDER),
+        ("LINEBELOW",     (0,0),(-1,0),   0,   colors.white),
     ]))
     elems.append(art_tbl)
-    elems.append(Spacer(1, 12))
+    elems.append(Spacer(1, 10))
 
-    totaux_data = [
-        ["Sous-total HT",      f"{total_ht_global:.2f} €"],
-        [f"TVA ({data.get('tva',20):.0f}%)", f"{total_tva_global:.2f} €"],
-    ]
-    totaux_tbl = Table(totaux_data, colWidths=[W*0.78, W*0.22])
+    # ── TOTAUX ────────────────────────────────────
+    totaux_rows = [["Sous-total HT", f"{total_ht_global:.2f} €"]]
+    for taux, montant in sorted(tva_details.items()):
+        totaux_rows.append([f"TVA {taux:.0f}%", f"{montant:.2f} €"])
+    totaux_tbl = Table(totaux_rows, colWidths=[W*0.8, W*0.2])
     totaux_tbl.setStyle(TableStyle([
-        ("FONTNAME",  (0,0),(-1,-1), "Helvetica"),
-        ("FONTSIZE",  (0,0),(-1,-1), 9),
-        ("ALIGN",     (1,0),(1,-1),  "RIGHT"),
-        ("TEXTCOLOR", (0,0),(-1,-1), colors.HexColor("#555555")),
+        ("FONTNAME",      (0,0),(-1,-1), "Helvetica"),
+        ("FONTSIZE",      (0,0),(-1,-1), 8),
+        ("ALIGN",         (1,0),(1,-1),  "RIGHT"),
+        ("TEXTCOLOR",     (0,0),(-1,-1), CGREY),
         ("TOPPADDING",    (0,0),(-1,-1), 2),
         ("BOTTOMPADDING", (0,0),(-1,-1), 2),
+        ("RIGHTPADDING",  (1,0),(1,-1),  7),
     ]))
     elems.append(totaux_tbl)
+    elems.append(Spacer(1, 2))
 
-    total_ligne = Table([["TOTAL TTC", f"{total_ttc_global:.2f} €"]], colWidths=[W*0.78, W*0.22])
+    total_ligne = Table([["TOTAL TTC", f"{total_ttc_global:.2f} €"]], colWidths=[W*0.8, W*0.2])
     total_ligne.setStyle(TableStyle([
         ("BACKGROUND",    (0,0),(-1,-1), C),
         ("TEXTCOLOR",     (0,0),(-1,-1), colors.white),
         ("FONTNAME",      (0,0),(-1,-1), "Helvetica-Bold"),
-        ("FONTSIZE",      (0,0),(-1,-1), 12),
+        ("FONTSIZE",      (0,0),(-1,-1), 11),
         ("ALIGN",         (1,0),(1,-1),  "RIGHT"),
+        ("TOPPADDING",    (0,0),(-1,-1), 7),
+        ("BOTTOMPADDING", (0,0),(-1,-1), 7),
+        ("LEFTPADDING",   (0,0),(0,-1),  10),
+        ("RIGHTPADDING",  (1,0),(1,-1),  7),
+    ]))
+    elems.append(total_ligne)
+    elems.append(Spacer(1, 18))
+
+    # ── PAIEMENT + SIGNATURE ─────────────────────────
+    pmt_lines = [
+        Paragraph("MODALITÉS DE PAIEMENT", fp("pm_h","Helvetica-Bold", 8, color=C)),
+        Spacer(1, 4),
+        Paragraph(f"Mode : <b>{mode}</b>", fp("pm1", size=8, color=colors.HexColor("#374151"))),
+        Paragraph(f"Échéance : <b>{echeance}</b>  —  Date limite : <b>{now.strftime('%d/%m/%Y')}</b>",
+                  fp("pm2", size=8, color=colors.HexColor("#374151"))),
+    ]
+    if mode.lower() in ("virement", "virement bancaire"):
+        pmt_lines += [
+            Spacer(1, 4),
+            Paragraph("Virement à effectuer à l'ordre de :", fp("pm3", size=7, color=CGREY)),
+            Paragraph(data["marque"], fp("pm4","Helvetica-Bold", 8)),
+        ]
+
+    sig_lines = [
+        Paragraph("BON POUR ACCORD", fp("sig_h","Helvetica-Bold", 8, TA_CENTER, C)),
+        Spacer(1, 28),
+        HRFlowable(width="100%", thickness=0.5, color=CBORDER),
+        Spacer(1, 3),
+        Paragraph("Signature et cachet", fp("sig_f", size=7, align=TA_CENTER, color=CGREY)),
+    ]
+
+    bottom_row = Table(
+        [[pmt_lines, "", sig_lines]],
+        colWidths=[W * 0.52, W * 0.04, W * 0.44]
+    )
+    bottom_row.setStyle(TableStyle([
+        ("VALIGN",        (0,0),(-1,-1), "TOP"),
+        ("BOX",           (0,0),(0,-1),  0.5, CBORDER),
+        ("BOX",           (2,0),(2,-1),  0.5, CBORDER),
         ("TOPPADDING",    (0,0),(-1,-1), 8),
         ("BOTTOMPADDING", (0,0),(-1,-1), 8),
         ("LEFTPADDING",   (0,0),(0,-1),  8),
-        ("RIGHTPADDING",  (1,0),(1,-1),  8),
+        ("LEFTPADDING",   (2,0),(2,-1),  8),
+        ("RIGHTPADDING",  (0,0),(0,-1),  8),
+        ("RIGHTPADDING",  (2,0),(2,-1),  8),
     ]))
-    elems.append(total_ligne)
-    elems.append(Spacer(1, 20))
+    elems.append(bottom_row)
+    elems.append(Spacer(1, 14))
 
-    mode = data.get("paiement", "Virement bancaire")
-    elems.append(Paragraph("Modalités de paiement", fp("pm_h","Helvetica-Bold",9,color=C)))
-    elems.append(Spacer(1, 3))
-    elems.append(Paragraph(f"Mode : {mode}  —  Échéance : {echeance}", fp("pm_d", size=8, color=colors.HexColor("#444444"))))
-    elems.append(Spacer(1, 20))
+    # ── PIED DE PAGE ──────────────────────────────
+    elems.append(HRFlowable(width="100%", thickness=0.5, color=CBORDER))
+    elems.append(Spacer(1, 5))
 
-    elems.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#CCCCCC")))
-    elems.append(Spacer(1, 6))
     mentions = (
-        "Paiement a reception. Tout retard de paiement entraine des penalites de 3 fois le taux d'interet legal "
-        "ainsi qu'une indemnite forfaitaire pour frais de recouvrement de 40 EUR (Art. L441-10 C. com.). "
-        "TVA acquittee sur les encaissements."
+        "Paiement à réception. Tout retard de paiement entraîne des pénalités de 3× le taux d'intérêt légal "
+        "ainsi qu'une indemnité forfaitaire de 40 € (Art. L441-10 C. com.). TVA acquittée sur encaissements."
     )
     if siret:
         mentions = f"SIRET : {siret}  —  " + mentions
-    elems.append(Paragraph(mentions, fp("men", size=7, color=colors.HexColor("#888888"))))
+
+    # Barcode de référence en bas
+    ref_val = numero.replace("-", "")[:12].ljust(12, "0")
+    try:
+        bc_ref = code128.Code128(ref_val, barHeight=0.8*cm, barWidth=0.8, humanReadable=False)
+        scale  = (W * 0.3) / bc_ref.width
+        bc     = code128.Code128(ref_val, barHeight=0.8*cm, barWidth=scale, humanReadable=True)
+        bc.hAlign = "RIGHT"
+        footer_tbl = Table(
+            [[Paragraph(mentions, fp("men", size=6.5, color=CGREY)), bc]],
+            colWidths=[W * 0.65, W * 0.35]
+        )
+        footer_tbl.setStyle(TableStyle([
+            ("VALIGN",  (0,0),(-1,-1), "MIDDLE"),
+            ("ALIGN",   (1,0),(1,-1),  "RIGHT"),
+        ]))
+        elems.append(footer_tbl)
+    except Exception:
+        elems.append(Paragraph(mentions, fp("men", size=6.5, color=CGREY)))
 
     doc.build(elems)
     return buf.getvalue()
 
+
+# ─────────────────────────────────────────
+#  MODALS
+# ─────────────────────────────────────────
 
 class ModalArticle(discord.ui.Modal, title="Ajouter un article"):
     nom_article = discord.ui.TextInput(label="Nom de l'article", placeholder="Ex: Chemise bleue")
@@ -455,7 +560,9 @@ class ModalArticle(discord.ui.Modal, title="Ajouter un article"):
             qte = int(self.quantite.value)
             prix = float(self.prix_ht.value.replace(",", "."))
         except ValueError:
-            await interaction.response.send_message("❌ Quantité ou prix invalide.", ephemeral=True)
+            await interaction.response.send_message(
+                "❌ Quantité ou prix invalide.", ephemeral=True
+            )
             return
 
         sessions[uid]["articles"].append({
@@ -567,6 +674,10 @@ class ModalInfosFacture(discord.ui.Modal, title="Informations — Facture"):
         )
 
 
+# ─────────────────────────────────────────
+#  VIEW ARTICLES
+# ─────────────────────────────────────────
+
 class ViewArticles(discord.ui.View):
     def __init__(self, type_doc: str):
         super().__init__(timeout=600)
@@ -582,7 +693,9 @@ class ViewArticles(discord.ui.View):
         data = sessions.get(uid)
 
         if not data or not data["articles"]:
-            await interaction.response.send_message("❌ Aucun article ajouté.", ephemeral=True)
+            await interaction.response.send_message(
+                "❌ Aucun article ajouté.", ephemeral=True
+            )
             return
 
         await interaction.response.defer(ephemeral=True, thinking=True)
@@ -648,6 +761,10 @@ class ViewArticles(discord.ui.View):
         await interaction.response.send_message("❌ Opération annulée.", ephemeral=True)
 
 
+# ─────────────────────────────────────────
+#  SÉLECTION DU STYLE DE TICKET
+# ─────────────────────────────────────────
+
 class ViewStyleTicket(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=120)
@@ -664,6 +781,10 @@ class ViewStyleTicket(discord.ui.View):
     async def restaurant(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(ModalInfosTicket("restaurant"))
 
+
+# ─────────────────────────────────────────
+#  VUE PRINCIPALE
+# ─────────────────────────────────────────
 
 class ViewChoix(discord.ui.View):
     def __init__(self):
@@ -684,6 +805,10 @@ class ViewChoix(discord.ui.View):
     async def facture(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(ModalInfosFacture())
 
+
+# ─────────────────────────────────────────
+#  COMMANDES SLASH
+# ─────────────────────────────────────────
 
 @tree.command(name="documents", description="Crée un ticket de caisse ou une facture et l'envoie par email")
 async def documents(interaction: discord.Interaction):
@@ -719,6 +844,10 @@ async def setup_documents(interaction: discord.Interaction):
     await interaction.response.send_message("✅ Panneau posté !", ephemeral=True)
 
 
+# ─────────────────────────────────────────
+#  EVENTS
+# ─────────────────────────────────────────
+
 @bot.event
 async def on_ready():
     print(f"✅ Bot connecté : {bot.user}")
@@ -733,4 +862,7 @@ async def on_ready():
         print("✅ Commandes slash synchronisées (global).")
 
 
+# ─────────────────────────────────────────
+#  LANCEMENT
+# ─────────────────────────────────────────
 bot.run(TOKEN)
