@@ -151,7 +151,7 @@ def generer_ticket(data: dict) -> bytes:
 
     elems = []
 
-    # ── NOM DE MARQUE ─────────────────────
+    # ── NOM DE MARQUE ───────────────────────
     nom = _spaced(data["marque"]) if s["spacing"] else data["marque"].upper()
     elems.append(p(nom, font=s["header_font"], size=s["header_sz"], align=TA_CENTER))
     elems.append(Spacer(1, 3))
@@ -262,7 +262,7 @@ def generer_ticket(data: dict) -> bytes:
     elems.append(p("conformement a mon accord porteur de carte.", align=TA_CENTER))
     elems.append(Spacer(1, 10))
 
-    # ── CODE-BARRES pleine largeur ──────────
+    # ── CODE-BARRES pleine largeur ─────────────
     barcode_val = "".join(random.choices(string.digits + string.ascii_uppercase, k=12))
     try:
         bc_ref = code128.Code128(barcode_val, barHeight=1.5*cm, barWidth=1.0, humanReadable=False)
@@ -323,7 +323,7 @@ def generer_facture(data: dict) -> bytes:
     bic       = data.get("bic", "")
     elems     = []
 
-    # ── 1. BANDEAU EN-TÊTe ──────────────────────────
+    # ── 1. BANDEAU EN-TÊTE ────────────────────────────────
     lw, rw = W * 0.60, W * 0.40
 
     em_lines = [[Paragraph(data["marque"].upper(),
@@ -362,7 +362,7 @@ def generer_facture(data: dict) -> bytes:
     elems.append(hdr_tbl)
     elems.append(Spacer(1, 12))
 
-    # ── 2. ÉMETTEUR  |  FACTURÉ À ───────────────────
+    # ── 2. ÉMETTEUR  |  FACTURÉ À ────────────────────────
     cl_name = f"{data['prenom']} {data['nom'].upper()}"
     bw, gap_w, dw = W * 0.46, W * 0.08, W * 0.46
 
@@ -422,7 +422,7 @@ def generer_facture(data: dict) -> bytes:
     elems.append(addr_tbl)
     elems.append(Spacer(1, 10))
 
-    # ── 3. BARRE DE RÉFÉRENCE ──────────────────────
+    # ── 3. BARRE DE RÉFÉRENCE ─────────────────────────────
     ref_cw = [W*0.22, W*0.22, W*0.22, W*0.34]
     ref_labels = [
         Paragraph("N° DE FACTURE",     st("Helvetica-Bold", 7, color=LG)),
@@ -450,7 +450,7 @@ def generer_facture(data: dict) -> bytes:
     elems.append(ref_tbl)
     elems.append(Spacer(1, 14))
 
-    # ── 4. TABLEAU ARTICLES ───────────────────────
+    # ── 4. TABLEAU ARTICLES ─────────────────────────────
     art_rows = [["DÉSIGNATION", "QTÉ", "P.U. HT", "TVA", "TOTAL HT", "TOTAL TTC"]]
     total_ht = total_tva = total_ttc = 0.0
     tva_details: dict[float, float] = {}
@@ -493,7 +493,7 @@ def generer_facture(data: dict) -> bytes:
     elems.append(art_tbl)
     elems.append(Spacer(1, 12))
 
-    # ── 5. TOTAUX calés à droite ──────────────────
+    # ── 5. TOTAUX calés à droite ────────────────────────────
     tw = W * 0.40
     lc = tw * 0.58
     vc = tw * 0.42
@@ -521,7 +521,7 @@ def generer_facture(data: dict) -> bytes:
         ("BACKGROUND",    (0,-1),(-1,-1), DARK),
     ]))
 
-    totals_wrap = Table([["", tot_tbl]], colWidths=[W - tw, tw])
+    totals_wrap = Table([["" , tot_tbl]], colWidths=[W - tw, tw])
     totals_wrap.setStyle(TableStyle([
         ("TOPPADDING",(0,0),(-1,-1),0), ("BOTTOMPADDING",(0,0),(-1,-1),0),
         ("LEFTPADDING",(0,0),(-1,-1),0), ("RIGHTPADDING",(0,0),(-1,-1),0),
@@ -530,7 +530,7 @@ def generer_facture(data: dict) -> bytes:
     elems.append(totals_wrap)
     elems.append(Spacer(1, 20))
 
-    # ── 6. PIED DE PAGE ─────────────────────────
+    # ── 6. PIED DE PAGE ──────────────────────────────
     elems.append(HRFlowable(width="100%", thickness=0.5, color=LN))
     elems.append(Spacer(1, 8))
 
@@ -653,20 +653,42 @@ class ModalInfosTicket(discord.ui.Modal, title="Informations — Ticket de caiss
         )
 
 
-class ModalInfosFacture(discord.ui.Modal, title="Informations — Facture"):
-    marque   = discord.ui.TextInput(label="Votre entreprise / marque")
-    siret    = discord.ui.TextInput(label="SIRET + N° TVA (optionnel)", required=False, placeholder="Ex: 123 456 789 00012 — FR12 123456789")
+class ModalInfosFacture1(discord.ui.Modal, title="Facture — Étape 1/2 · Émetteur & Client"):
+    marque   = discord.ui.TextInput(label="Votre entreprise / marque", placeholder="Ex: ACME SAS")
+    adresse  = discord.ui.TextInput(label="Votre adresse", required=False, placeholder="1 rue de la Paix, 75001 Paris")
+    siret    = discord.ui.TextInput(label="SIRET — N° TVA intracommunautaire", required=False, placeholder="123 456 789 00012 — FR12 123456789")
     client   = discord.ui.TextInput(label="Prénom NOM du client", placeholder="Jean DUPONT")
-    email    = discord.ui.TextInput(label="Email client", placeholder="client@email.com")
-    adresse  = discord.ui.TextInput(label="Votre adresse (optionnel)", required=False, placeholder="1 rue de la Paix, 75001 Paris")
+    email    = discord.ui.TextInput(label="Email du client", placeholder="client@email.com")
 
     async def on_submit(self, interaction: discord.Interaction):
         uid = interaction.user.id
-        parts = self.client.value.strip().split(" ", 1)
+        sessions[uid] = {
+            "_step1": True,
+            "marque": self.marque.value,
+            "adresse_emetteur": self.adresse.value or "",
+            "siret_raw": self.siret.value or "",
+            "client_full": self.client.value.strip(),
+            "email": self.email.value,
+        }
+        await interaction.response.send_modal(ModalInfosFacture2())
+
+
+class ModalInfosFacture2(discord.ui.Modal, title="Facture — Étape 2/2 · Paiement & Coordonnées"):
+    adresse_client = discord.ui.TextInput(label="Adresse du client", required=False, placeholder="10 avenue Victor Hugo, 69001 Lyon")
+    paiement       = discord.ui.TextInput(label="Mode de règlement", placeholder="Virement bancaire / Chèque / CB", default="Virement bancaire")
+    echeance       = discord.ui.TextInput(label="Délai de paiement", placeholder="30 jours / À réception / 15 jours", default="30 jours")
+    iban           = discord.ui.TextInput(label="IBAN (optionnel)", required=False, placeholder="FR76 3000 6000 0112 3456 7890 189")
+    bic            = discord.ui.TextInput(label="BIC / SWIFT (optionnel)", required=False, placeholder="BNPAFRPPXXX")
+
+    async def on_submit(self, interaction: discord.Interaction):
+        uid = interaction.user.id
+        step1 = sessions.get(uid, {})
+
+        parts = step1.get("client_full", "").split(" ", 1)
         prenom = parts[0]
         nom = parts[1] if len(parts) > 1 else ""
 
-        siret_raw = self.siret.value or ""
+        siret_raw = step1.get("siret_raw", "")
         siret_val = ""
         tva_intra = ""
         if "—" in siret_raw:
@@ -678,22 +700,26 @@ class ModalInfosFacture(discord.ui.Modal, title="Informations — Facture"):
 
         sessions[uid] = {
             "type": "facture",
-            "marque": self.marque.value,
-            "adresse_emetteur": self.adresse.value or "",
+            "marque": step1.get("marque", ""),
+            "adresse_emetteur": step1.get("adresse_emetteur", ""),
             "siret": siret_val,
             "tva_intra": tva_intra,
             "prenom": prenom,
             "nom": nom,
-            "email": self.email.value,
-            "paiement": "Virement bancaire",
+            "email": step1.get("email", ""),
+            "adresse_client": self.adresse_client.value or "",
+            "paiement": self.paiement.value or "Virement bancaire",
+            "echeance": self.echeance.value or "30 jours",
+            "iban": self.iban.value or "",
+            "bic": self.bic.value or "",
             "tva": 20.0,
             "articles": [],
             "numero": f"FAC-{gen_numero()}",
-            "echeance": "30 jours",
-            "adresse_client": "",
         }
+        client_full = step1.get("client_full", "")
+        marque = step1.get("marque", "")
         await interaction.response.send_message(
-            f"✅ Facture pour **{self.client.value}** — entreprise **{self.marque.value}**\n\n"
+            f"✅ Facture pour **{client_full}** — entreprise **{marque}**\n\n"
             f"Ajoute maintenant les articles / prestations :",
             view=ViewArticles("facture"),
             ephemeral=True,
@@ -816,7 +842,7 @@ class ViewChoix(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="🧾 Ticket de caisse", style=discord.ButtonStyle.primary, custom_id="btn_ticket")
+    @discord.ui.button(label="🧧 Ticket de caisse", style=discord.ButtonStyle.primary, custom_id="btn_ticket")
     async def ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_message(
             "**Quel style de ticket ?**\n\n"
@@ -829,7 +855,7 @@ class ViewChoix(discord.ui.View):
 
     @discord.ui.button(label="📄 Facture", style=discord.ButtonStyle.secondary, custom_id="btn_facture")
     async def facture(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(ModalInfosFacture())
+        await interaction.response.send_modal(ModalInfosFacture1())
 
 
 # ─────────────────────────────────────────
@@ -842,7 +868,7 @@ async def documents(interaction: discord.Interaction):
         title="📄 Générateur de documents",
         description=(
             "Choisis le type de document à créer :\n\n"
-            "🧾 **Ticket de caisse** — reçu simple (petit format)\n"
+            "🧧 **Ticket de caisse** — reçu simple (petit format)\n"
             "📄 **Facture** — document professionnel A4\n\n"
             "Le document sera généré en PDF et envoyé par email au client,"
             " ainsi qu'en DM Discord."
@@ -859,7 +885,7 @@ async def setup_documents(interaction: discord.Interaction):
         title="📄 Générateur de documents",
         description=(
             "Clique sur un bouton pour créer un document :\n\n"
-            "🧾 **Ticket de caisse** — reçu de vente (format thermique)\n"
+            "🧧 **Ticket de caisse** — reçu de vente (format thermique)\n"
             "📄 **Facture** — document comptable A4\n\n"
             "Le PDF sera envoyé par **email** et en **DM Discord**."
         ),
