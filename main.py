@@ -17,6 +17,7 @@ from reportlab.lib.units import cm
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, HRFlowable
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER, TA_RIGHT, TA_LEFT
+from reportlab.graphics.barcode import code128
 
 def _load_env(path=".env"):
     if not os.path.exists(path):
@@ -84,89 +85,188 @@ def envoyer_email(destinataire: str, sujet: str, corps: str, pdf_bytes: bytes, n
 
 
 # ─────────────────────────────────────────
+#  STYLES DE TICKETS (header uniquement)
+# ─────────────────────────────────────────
+TICKET_STYLES = {
+    "luxe": {
+        "label":       "💎 Luxe (LV, Chanel, Dior…)",
+        "header_font": "Times-Bold",
+        "header_sz":   22,
+        "spacing":     True,
+    },
+    "standard": {
+        "label":       "🛍️ Standard (Zara, Nike, Sephora…)",
+        "header_font": "Helvetica-Bold",
+        "header_sz":   18,
+        "spacing":     False,
+    },
+    "restaurant": {
+        "label":       "🍔 Restaurant / Supermarché",
+        "header_font": "Courier-Bold",
+        "header_sz":   14,
+        "spacing":     False,
+    },
+}
+
+
+# ─────────────────────────────────────────
 #  GÉNÉRATION PDF — TICKET DE CAISSE
 # ─────────────────────────────────────────
+def _spaced(text: str) -> str:
+    return "  ".join(text.upper())
+
 def generer_ticket(data: dict) -> bytes:
+    style_key = data.get("style", "standard")
+    s = TICKET_STYLES.get(style_key, TICKET_STYLES["standard"])
+
+    W_PAGE = 8 * cm
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
         buf,
-        pagesize=(8 * cm, 25 * cm),
+        pagesize=(W_PAGE, 30 * cm),
         rightMargin=0.5 * cm,
         leftMargin=0.5 * cm,
-        topMargin=0.5 * cm,
-        bottomMargin=0.5 * cm,
+        topMargin=0.6 * cm,
+        bottomMargin=0.6 * cm,
     )
+    W = W_PAGE - 1.0 * cm
+    now = datetime.now()
+    tva_rate = data.get("tva", 20.0)
+    BODY = "Courier"
+    BODY_B = "Courier-Bold"
+    SZ = 7
 
-    styles = getSampleStyleSheet()
-    bold_center = ParagraphStyle("bc", parent=styles["Normal"], alignment=TA_CENTER, fontName="Helvetica-Bold")
-    center = ParagraphStyle("c", parent=styles["Normal"], alignment=TA_CENTER, fontSize=8)
-    small = ParagraphStyle("s", parent=styles["Normal"], fontSize=7)
+    def p(text, font=BODY, size=SZ, align=TA_LEFT):
+        st = ParagraphStyle("_", fontName=font, fontSize=size, alignment=align, leading=size + 2)
+        return Paragraph(text, st)
+
+    def sep(char="-"):
+        return p(char * 42, align=TA_CENTER)
 
     elems = []
 
-    elems.append(Paragraph(data["marque"].upper(), bold_center))
+    # ── NOM DE MARQUE ───────────────────────
+    nom = _spaced(data["marque"]) if s["spacing"] else data["marque"].upper()
+    elems.append(p(nom, font=s["header_font"], size=s["header_sz"], align=TA_CENTER))
     elems.append(Spacer(1, 3))
-    elems.append(HRFlowable(width="100%", thickness=1, color=colors.black))
+    if data.get("adresse"):
+        for ligne in data["adresse"].split(","):
+            elems.append(p(ligne.strip(), align=TA_CENTER))
+    elems.append(Spacer(1, 4))
+    elems.append(sep("-"))
+    elems.append(Spacer(1, 4))
+
+    # ── INFOS TRANSACTION ─────────────────────
+    store_num  = "".join(random.choices(string.digits, k=5))
+    reg_num    = "".join(random.choices(string.digits, k=2))
+    cashier    = "".join(random.choices(string.ascii_uppercase, k=5))
+    client_id  = "".join(random.choices(string.digits, k=13))
+    trans_num  = data["numero"]
+
+    info = Table([
+        [p(f"Trans # : {trans_num}", BODY_B), p(f"Date : {now.strftime('%d/%m/%Y')}", align=TA_RIGHT)],
+        [p(f"Store  : {store_num}"),           p(f"Heure : {now.strftime('%H:%M:%S')}", align=TA_RIGHT)],
+        [p(f"Caissier : {cashier}"),            p(f"Register : {reg_num}", align=TA_RIGHT)],
+    ], colWidths=[W * 0.55, W * 0.45])
+    info.setStyle(TableStyle([
+        ("FONTSIZE", (0,0),(-1,-1), SZ),
+        ("TOPPADDING", (0,0),(-1,-1), 1),
+        ("BOTTOMPADDING", (0,0),(-1,-1), 1),
+    ]))
+    elems.append(info)
+    elems.append(p(f"Customer : {data['prenom']} {data['nom'].upper()}"))
+    elems.append(p(f"Customer ID : {client_id}"))
+    elems.append(Spacer(1, 4))
+    elems.append(sep("-"))
     elems.append(Spacer(1, 3))
 
-    now = datetime.now()
-    elems.append(Paragraph(f"Date : {now.strftime('%d/%m/%Y  %H:%M')}", small))
-    elems.append(Paragraph(f"Ticket n° {data['numero']}", small))
-    elems.append(Paragraph(f"Client : {data['prenom']} {data['nom'].upper()}", small))
-    elems.append(Spacer(1, 5))
-    elems.append(HRFlowable(width="100%", thickness=0.5, color=colors.grey))
-    elems.append(Spacer(1, 5))
+    # ── EN-TÊTE ARTICLES ──────────────────────
+    elems.append(p("ARTICLE          QTE  PRIX    MONTANT", BODY_B))
+    elems.append(sep("-"))
 
-    table_data = [["Article", "Qté", "P.U.", "Total"]]
+    # ── ARTICLES ───────────────────────────────
     total_ttc = 0.0
     for art in data["articles"]:
+        code_art = "".join(random.choices(string.digits, k=9))
         ligne_total = art["quantite"] * art["prix_unitaire"]
         total_ttc += ligne_total
-        table_data.append([
-            art["nom"],
-            str(art["quantite"]),
-            f"{art['prix_unitaire']:.2f}€",
-            f"{ligne_total:.2f}€",
-        ])
+        qte = str(art["quantite"]).rjust(3)
+        pu  = f"{art['prix_unitaire']:.2f}".rjust(7)
+        tot = f"{ligne_total:.2f}".rjust(9)
+        elems.append(p(f"{code_art}"))
+        elems.append(p(art["nom"], BODY_B))
+        elems.append(p(f"  {qte}  {pu}  {tot}"))
+    elems.append(Spacer(1, 4))
+    elems.append(sep("-"))
 
-    t = Table(table_data, colWidths=[3 * cm, 1 * cm, 1.5 * cm, 1.5 * cm])
-    t.setStyle(TableStyle([
-        ("FONTNAME",    (0, 0), (-1, 0),  "Helvetica-Bold"),
-        ("FONTSIZE",    (0, 0), (-1, -1), 7),
-        ("ROWBACKGROUNDS", (0, 0), (-1, -1), [colors.white, colors.lightgrey]),
-        ("GRID",        (0, 0), (-1, -1), 0.3, colors.grey),
-        ("ALIGN",       (1, 1), (-1, -1), "RIGHT"),
-    ]))
-    elems.append(t)
-
-    elems.append(Spacer(1, 5))
-    elems.append(HRFlowable(width="100%", thickness=0.5, color=colors.grey))
-
-    tva_rate = data.get("tva", 20.0)
-    ht = total_ttc / (1 + tva_rate / 100)
-    tva_montant = total_ttc - ht
-
-    resume = Table([
-        ["Sous-total HT", f"{ht:.2f}€"],
-        [f"TVA ({tva_rate:.0f}%)", f"{tva_montant:.2f}€"],
-        ["TOTAL TTC", f"{total_ttc:.2f}€"],
-    ], colWidths=[4.5 * cm, 2.5 * cm])
-    resume.setStyle(TableStyle([
-        ("FONTSIZE",    (0, 0), (-1, -1), 8),
-        ("ALIGN",       (1, 0), (1, -1), "RIGHT"),
-        ("FONTNAME",    (0, 2), (-1, 2),  "Helvetica-Bold"),
-        ("LINEABOVE",   (0, 2), (-1, 2),  0.5, colors.black),
-    ]))
-    elems.append(resume)
-
-    elems.append(Spacer(1, 8))
+    # ── TOTAUX ──────────────────────────────────
+    ht  = total_ttc / (1 + tva_rate / 100)
+    tva = total_ttc - ht
     mode = data.get("paiement", "Carte bancaire")
-    elems.append(Paragraph(f"Mode de paiement : {mode}", small))
+    monnaie = "EUR"
+
+    totaux = [
+        ("SOUS-TOTAL HT", f"{monnaie}  {ht:.2f}"),
+        (f"TVA {tva_rate:.0f}%",       f"{monnaie}  {tva:.2f}"),
+        ("",              ""),
+        ("TOTAL (EUR)",   f"{monnaie}  {total_ttc:.2f}"),
+    ]
+    for label, val in totaux:
+        if not label:
+            elems.append(Spacer(1, 3))
+            continue
+        row = Table([[p(label, BODY_B if "TOTAL" in label else BODY),
+                      p(val, BODY_B if "TOTAL" in label else BODY, align=TA_RIGHT)]],
+                    colWidths=[W*0.55, W*0.45])
+        row.setStyle(TableStyle([
+            ("TOPPADDING",    (0,0),(-1,-1), 1),
+            ("BOTTOMPADDING", (0,0),(-1,-1), 1),
+            ("LINEABOVE", (0,0),(-1,0), 0.5 if "TOTAL (EUR)" in label else 0, colors.black),
+        ]))
+        elems.append(row)
+
+    elems.append(Spacer(1, 4))
+    elems.append(sep("-"))
+
+    # ── PAIEMENT ────────────────────────────────
+    pmt = Table([
+        [p(mode.upper(), BODY_B), p(f"EUR  {total_ttc:.2f}", BODY_B, align=TA_RIGHT)],
+        [p("MONNAIE RENDUE"),     p("EUR   0.00", align=TA_RIGHT)],
+    ], colWidths=[W*0.55, W*0.45])
+    pmt.setStyle(TableStyle([
+        ("FONTSIZE", (0,0),(-1,-1), SZ),
+        ("TOPPADDING",    (0,0),(-1,-1), 1),
+        ("BOTTOMPADDING", (0,0),(-1,-1), 1),
+    ]))
+    elems.append(pmt)
+    elems.append(Spacer(1, 4))
+    elems.append(sep("-"))
+
+    # ── INFOS FINALES ─────────────────────────
+    nb = len(data["articles"])
+    elems.append(Spacer(1, 3))
+    elems.append(p(f"NOMBRE D'ARTICLES VENDUS = {nb}"))
+    elems.append(Spacer(1, 6))
+
+    if data.get("siret"):
+        elems.append(p(f"SIRET : {data['siret']}", align=TA_CENTER))
+
+    elems.append(Spacer(1, 4))
+    elems.append(p("J'accepte de payer le montant ci-dessus", align=TA_CENTER))
+    elems.append(p("conformement a mon accord porteur de carte.", align=TA_CENTER))
     elems.append(Spacer(1, 10))
-    elems.append(HRFlowable(width="100%", thickness=1, color=colors.black))
-    elems.append(Spacer(1, 5))
-    elems.append(Paragraph("Merci de votre achat !", bold_center))
-    elems.append(Paragraph(data["marque"], center))
+
+    # ── CODE-BARRES pleine largeur ──────────────
+    barcode_val = "".join(random.choices(string.digits + string.ascii_uppercase, k=12))
+    try:
+        bc_ref = code128.Code128(barcode_val, barHeight=1.5*cm, barWidth=1.0, humanReadable=False)
+        scale = W / bc_ref.width
+        bc = code128.Code128(barcode_val, barHeight=1.5*cm, barWidth=scale, humanReadable=True)
+        bc.hAlign = "CENTER"
+        elems.append(Spacer(1, 4))
+        elems.append(bc)
+    except Exception:
+        elems.append(p(barcode_val, align=TA_CENTER))
 
     doc.build(elems)
     return buf.getvalue()
@@ -177,114 +277,184 @@ def generer_ticket(data: dict) -> bytes:
 # ─────────────────────────────────────────
 def generer_facture(data: dict) -> bytes:
     buf = io.BytesIO()
-    doc = SimpleDocTemplate(buf, pagesize=A4, rightMargin=2 * cm, leftMargin=2 * cm,
-                             topMargin=2 * cm, bottomMargin=2 * cm)
+    doc = SimpleDocTemplate(buf, pagesize=A4, rightMargin=2*cm, leftMargin=2*cm,
+                             topMargin=2*cm, bottomMargin=2*cm)
+
+    C = colors.HexColor("#1B2A4A")
+    C2 = colors.HexColor("#F0F4FA")
 
     styles = getSampleStyleSheet()
-    titre_style = ParagraphStyle("titre", parent=styles["Title"], fontSize=22, textColor=colors.HexColor("#2C3E50"))
-    h2 = ParagraphStyle("h2", parent=styles["Normal"], fontSize=11, fontName="Helvetica-Bold",
-                         textColor=colors.HexColor("#2C3E50"))
-    normal = styles["Normal"]
-    right = ParagraphStyle("right", parent=normal, alignment=TA_RIGHT)
+    N = styles["Normal"]
+
+    def fp(name, font="Helvetica", size=9, align=TA_LEFT, color=colors.black, leading=None):
+        return ParagraphStyle(name, fontName=font, fontSize=size, alignment=align,
+                               textColor=color, leading=leading or size + 3)
 
     elems = []
+    now = datetime.now()
+    W = 17 * cm
 
-    header_data = [
-        [Paragraph(data["marque"].upper(), titre_style), ""],
-        [Paragraph(data.get("adresse_emetteur", ""), normal),
-         Paragraph(f"<b>FACTURE N°</b> {data['numero']}", right)],
-        ["", Paragraph(f"Date : {datetime.now().strftime('%d/%m/%Y')}", right)],
-        ["", Paragraph(f"Échéance : {data.get('echeance', '30 jours')}", right)],
-    ]
-    header_table = Table(header_data, colWidths=[9 * cm, 9 * cm])
-    header_table.setStyle(TableStyle([
-        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("SPAN",   (0, 0), (1, 0)),
+    brand_cell = Table(
+        [[Paragraph(data["marque"].upper(), fp("b1","Helvetica-Bold",20,TA_LEFT,colors.white)),
+          Paragraph(f"<b>FACTURE</b><br/>N° {data['numero']}", fp("b2","Helvetica-Bold",12,TA_RIGHT,colors.white))]],
+        colWidths=[W*0.6, W*0.4]
+    )
+    brand_cell.setStyle(TableStyle([
+        ("BACKGROUND", (0,0),(-1,-1), C),
+        ("TOPPADDING",    (0,0),(-1,-1), 14),
+        ("BOTTOMPADDING", (0,0),(-1,-1), 14),
+        ("LEFTPADDING",   (0,0),(0,-1), 12),
+        ("RIGHTPADDING",  (1,0),(1,-1), 12),
+        ("VALIGN", (0,0),(-1,-1), "MIDDLE"),
     ]))
-    elems.append(header_table)
-    elems.append(Spacer(1, 20))
+    elems.append(brand_cell)
+    elems.append(Spacer(1, 12))
 
-    elems.append(Paragraph("Facturé à :", h2))
-    elems.append(Spacer(1, 4))
-    client_data = [
-        [f"{data['prenom']} {data['nom'].upper()}"],
-        [data.get("adresse_client", "")],
-        [data.get("email_client", "")],
-        [data.get("siret_client", "")],
+    adr_emetteur = data.get("adresse_emetteur", "")
+    siret = data.get("siret", "")
+    tva_intra = data.get("tva_intra", "")
+    date_str = now.strftime("%d/%m/%Y")
+    echeance = data.get("echeance", "30 jours")
+
+    emetteur_lines = [data["marque"]]
+    if adr_emetteur:
+        emetteur_lines.append(adr_emetteur)
+    if siret:
+        emetteur_lines.append(f"SIRET : {siret}")
+    if tva_intra:
+        emetteur_lines.append(f"N° TVA : {tva_intra}")
+
+    client_lines = [f"{data['prenom']} {data['nom'].upper()}"]
+    if data.get("adresse_client"):
+        client_lines.append(data["adresse_client"])
+    client_lines.append(data.get("email", ""))
+
+    def info_block(titre, lignes, couleur_titre=C):
+        rows = [[Paragraph(titre, fp("t", "Helvetica-Bold", 8, color=couleur_titre))]]
+        for l in lignes:
+            if l:
+                rows.append([Paragraph(l, fp("l", size=8))])
+        tbl = Table(rows, colWidths=[W*0.45])
+        tbl.setStyle(TableStyle([
+            ("BACKGROUND", (0,0),(0,0), C2),
+            ("TOPPADDING",    (0,0),(-1,-1), 3),
+            ("BOTTOMPADDING", (0,0),(-1,-1), 3),
+            ("LEFTPADDING",   (0,0),(-1,-1), 6),
+            ("BOX", (0,0),(-1,-1), 0.5, colors.HexColor("#CCCCCC")),
+        ]))
+        return tbl
+
+    meta_rows = [
+        ["Date d'émission :", date_str],
+        ["Échéance :", echeance],
     ]
-    client_table = Table([[Paragraph(row[0], normal)] for row in client_data if row[0]],
-                          colWidths=[10 * cm])
-    client_table.setStyle(TableStyle([
-        ("BOX",        (0, 0), (-1, -1), 0.5, colors.grey),
-        ("BACKGROUND", (0, 0), (-1, 0),  colors.HexColor("#ECF0F1")),
-        ("LEFTPADDING", (0, 0), (-1, -1), 8),
-        ("TOPPADDING",  (0, 0), (-1, -1), 4),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    meta_tbl = Table(meta_rows, colWidths=[W*0.18, W*0.2])
+    meta_tbl.setStyle(TableStyle([
+        ("FONTNAME", (0,0),(0,-1), "Helvetica-Bold"),
+        ("FONTSIZE", (0,0),(-1,-1), 8),
+        ("TEXTCOLOR",(0,0),(0,-1), colors.HexColor("#555555")),
+        ("TOPPADDING",    (0,0),(-1,-1), 2),
+        ("BOTTOMPADDING", (0,0),(-1,-1), 2),
     ]))
-    elems.append(client_table)
-    elems.append(Spacer(1, 20))
 
-    elems.append(Paragraph("Détail des prestations", h2))
+    header2 = Table(
+        [[info_block("ÉMETTEUR", emetteur_lines),
+          "",
+          info_block("FACTURÉ À", client_lines)]],
+        colWidths=[W*0.45, W*0.1, W*0.45]
+    )
+    header2.setStyle(TableStyle([("VALIGN",(0,0),(-1,-1),"TOP")]))
+    elems.append(header2)
     elems.append(Spacer(1, 6))
+    elems.append(meta_tbl)
+    elems.append(Spacer(1, 16))
 
-    table_data = [["Description", "Quantité", "Prix unitaire HT", "TVA", "Total TTC"]]
-    total_ttc = 0.0
+    art_header = ["Description", "Qté", "P.U. HT", "TVA", "Total TTC"]
+    rows = [art_header]
+    total_ht_global = 0.0
+    total_tva_global = 0.0
+    total_ttc_global = 0.0
+
     for art in data["articles"]:
         tva_r = art.get("tva", data.get("tva", 20.0))
-        prix_ttc = art["prix_unitaire"] * (1 + tva_r / 100)
-        ligne_total = art["quantite"] * prix_ttc
-        total_ttc += ligne_total
-        table_data.append([
-            art["nom"],
-            str(art["quantite"]),
-            f"{art['prix_unitaire']:.2f} €",
-            f"{tva_r:.0f}%",
-            f"{ligne_total:.2f} €",
+        pu_ht = art["prix_unitaire"]
+        qte = art["quantite"]
+        ligne_ht = qte * pu_ht
+        ligne_tva = ligne_ht * tva_r / 100
+        ligne_ttc = ligne_ht + ligne_tva
+        total_ht_global  += ligne_ht
+        total_tva_global += ligne_tva
+        total_ttc_global += ligne_ttc
+        rows.append([
+            art["nom"], str(qte),
+            f"{pu_ht:.2f} €", f"{tva_r:.0f}%",
+            f"{ligne_ttc:.2f} €",
         ])
 
-    col_widths = [7 * cm, 2 * cm, 3.5 * cm, 2 * cm, 3.5 * cm]
-    t = Table(table_data, colWidths=col_widths, repeatRows=1)
-    t.setStyle(TableStyle([
-        ("BACKGROUND",  (0, 0), (-1, 0),  colors.HexColor("#2C3E50")),
-        ("TEXTCOLOR",   (0, 0), (-1, 0),  colors.white),
-        ("FONTNAME",    (0, 0), (-1, 0),  "Helvetica-Bold"),
-        ("FONTSIZE",    (0, 0), (-1, -1), 9),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F2F3F4")]),
-        ("GRID",        (0, 0), (-1, -1), 0.3, colors.grey),
-        ("ALIGN",       (1, 1), (-1, -1), "RIGHT"),
-        ("TOPPADDING",  (0, 0), (-1, -1), 5),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+    col_w = [W*0.38, W*0.08, W*0.18, W*0.1, W*0.18]
+    art_tbl = Table(rows, colWidths=col_w, repeatRows=1)
+    art_tbl.setStyle(TableStyle([
+        ("BACKGROUND",   (0,0),(-1,0),  C),
+        ("TEXTCOLOR",    (0,0),(-1,0),  colors.white),
+        ("FONTNAME",     (0,0),(-1,0),  "Helvetica-Bold"),
+        ("FONTSIZE",     (0,0),(-1,-1), 9),
+        ("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.white, C2]),
+        ("ALIGN",        (1,0),(-1,-1), "RIGHT"),
+        ("TOPPADDING",   (0,0),(-1,-1), 5),
+        ("BOTTOMPADDING",(0,0),(-1,-1), 5),
+        ("LEFTPADDING",  (0,0),(0,-1),  6),
+        ("LINEBELOW",    (0,-1),(-1,-1), 0.5, colors.HexColor("#CCCCCC")),
+        ("LINEBELOW",    (0,0),(-1,0),   0, colors.white),
     ]))
-    elems.append(t)
-    elems.append(Spacer(1, 15))
+    elems.append(art_tbl)
+    elems.append(Spacer(1, 12))
 
-    tva_rate = data.get("tva", 20.0)
-    ht = total_ttc / (1 + tva_rate / 100)
-    tva_montant = total_ttc - ht
-
-    totaux = Table([
-        ["Sous-total HT",   f"{ht:.2f} €"],
-        [f"TVA ({tva_rate:.0f}%)", f"{tva_montant:.2f} €"],
-        ["TOTAL TTC",       f"{total_ttc:.2f} €"],
-    ], colWidths=[12 * cm, 6 * cm])
-    totaux.setStyle(TableStyle([
-        ("FONTSIZE",    (0, 0), (-1, -1), 10),
-        ("ALIGN",       (1, 0), (1, -1), "RIGHT"),
-        ("FONTNAME",    (0, 2), (-1, 2),  "Helvetica-Bold"),
-        ("FONTSIZE",    (0, 2), (-1, 2),  12),
-        ("BACKGROUND",  (0, 2), (-1, 2),  colors.HexColor("#2C3E50")),
-        ("TEXTCOLOR",   (0, 2), (-1, 2),  colors.white),
-        ("TOPPADDING",  (0, 2), (-1, 2),  8),
-        ("BOTTOMPADDING", (0, 2), (-1, 2), 8),
-        ("LINEABOVE",   (0, 2), (-1, 2),  1, colors.black),
+    totaux_data = [
+        ["Sous-total HT",      f"{total_ht_global:.2f} €"],
+        [f"TVA ({data.get('tva',20):.0f}%)", f"{total_tva_global:.2f} €"],
+    ]
+    totaux_tbl = Table(totaux_data, colWidths=[W*0.78, W*0.22])
+    totaux_tbl.setStyle(TableStyle([
+        ("FONTNAME",  (0,0),(-1,-1), "Helvetica"),
+        ("FONTSIZE",  (0,0),(-1,-1), 9),
+        ("ALIGN",     (1,0),(1,-1),  "RIGHT"),
+        ("TEXTCOLOR", (0,0),(-1,-1), colors.HexColor("#555555")),
+        ("TOPPADDING",    (0,0),(-1,-1), 2),
+        ("BOTTOMPADDING", (0,0),(-1,-1), 2),
     ]))
-    elems.append(totaux)
+    elems.append(totaux_tbl)
 
-    elems.append(Spacer(1, 30))
-    elems.append(HRFlowable(width="100%", thickness=0.5, color=colors.grey))
+    total_ligne = Table([["TOTAL TTC", f"{total_ttc_global:.2f} €"]], colWidths=[W*0.78, W*0.22])
+    total_ligne.setStyle(TableStyle([
+        ("BACKGROUND",    (0,0),(-1,-1), C),
+        ("TEXTCOLOR",     (0,0),(-1,-1), colors.white),
+        ("FONTNAME",      (0,0),(-1,-1), "Helvetica-Bold"),
+        ("FONTSIZE",      (0,0),(-1,-1), 12),
+        ("ALIGN",         (1,0),(1,-1),  "RIGHT"),
+        ("TOPPADDING",    (0,0),(-1,-1), 8),
+        ("BOTTOMPADDING", (0,0),(-1,-1), 8),
+        ("LEFTPADDING",   (0,0),(0,-1),  8),
+        ("RIGHTPADDING",  (1,0),(1,-1),  8),
+    ]))
+    elems.append(total_ligne)
+    elems.append(Spacer(1, 20))
+
+    mode = data.get("paiement", "Virement bancaire")
+    elems.append(Paragraph("Modalités de paiement", fp("pm_h","Helvetica-Bold",9,color=C)))
+    elems.append(Spacer(1, 3))
+    elems.append(Paragraph(f"Mode : {mode}  —  Échéance : {echeance}", fp("pm_d", size=8, color=colors.HexColor("#444444"))))
+    elems.append(Spacer(1, 20))
+
+    elems.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#CCCCCC")))
     elems.append(Spacer(1, 6))
-    mentions = data.get("mentions", "Paiement à réception. Tout retard entraîne des pénalités de 3× le taux légal.")
-    elems.append(Paragraph(mentions, ParagraphStyle("tiny", parent=normal, fontSize=7, textColor=colors.grey)))
+    mentions = (
+        "Paiement a reception. Tout retard de paiement entraine des penalites de 3 fois le taux d'interet legal "
+        "ainsi qu'une indemnite forfaitaire pour frais de recouvrement de 40 EUR (Art. L441-10 C. com.). "
+        "TVA acquittee sur les encaissements."
+    )
+    if siret:
+        mentions = f"SIRET : {siret}  —  " + mentions
+    elems.append(Paragraph(mentions, fp("men", size=7, color=colors.HexColor("#888888"))))
 
     doc.build(elems)
     return buf.getvalue()
@@ -339,60 +509,85 @@ class ModalArticle(discord.ui.Modal, title="Ajouter un article"):
 
 
 class ModalInfosTicket(discord.ui.Modal, title="Informations — Ticket de caisse"):
-    marque  = discord.ui.TextInput(label="Nom de la boutique / marque", placeholder="Ex: Ma Boutique")
-    prenom  = discord.ui.TextInput(label="Prénom du client")
-    nom     = discord.ui.TextInput(label="Nom du client")
-    email   = discord.ui.TextInput(label="Email (pour recevoir le ticket)", placeholder="client@email.com")
-    paiement = discord.ui.TextInput(label="Mode de paiement", placeholder="Carte bancaire / Espèces / …", default="Carte bancaire")
+    marque   = discord.ui.TextInput(label="Nom de la boutique / marque", placeholder="Ex: ZARA, Louis Vuitton…")
+    adresse  = discord.ui.TextInput(label="Adresse de la boutique (optionnel)", required=False, placeholder="22 Av. des Champs-Elysées, 75008 Paris")
+    client   = discord.ui.TextInput(label="Prénom NOM du client", placeholder="Jean DUPONT")
+    email    = discord.ui.TextInput(label="Email client", placeholder="client@email.com")
+    paiement = discord.ui.TextInput(label="Mode de paiement", placeholder="Carte Visa / Espèces / PayPal…", default="Carte bancaire")
+
+    def __init__(self, style: str = "standard"):
+        super().__init__()
+        self.style = style
 
     async def on_submit(self, interaction: discord.Interaction):
         uid = interaction.user.id
+        parts = self.client.value.strip().split(" ", 1)
+        prenom = parts[0]
+        nom = parts[1] if len(parts) > 1 else ""
         sessions[uid] = {
             "type": "ticket",
+            "style": self.style,
             "marque": self.marque.value,
-            "prenom": self.prenom.value,
-            "nom": self.nom.value,
+            "adresse": self.adresse.value or "",
+            "prenom": prenom,
+            "nom": nom,
             "email": self.email.value,
             "paiement": self.paiement.value,
             "tva": 20.0,
             "articles": [],
             "numero": gen_numero(),
         }
+        style_label = TICKET_STYLES[self.style]["label"]
         await interaction.response.send_message(
-            f"✅ Infos enregistrées pour **{self.prenom.value} {self.nom.value}** "
-            f"— boutique **{self.marque.value}**.\n\nAjoute maintenant tes articles :",
+            f"✅ **{self.marque.value}** — style *{style_label}*\n"
+            f"Client : **{self.client.value}**\n\nAjoute maintenant les articles :",
             view=ViewArticles("ticket"),
             ephemeral=True,
         )
 
 
 class ModalInfosFacture(discord.ui.Modal, title="Informations — Facture"):
-    marque          = discord.ui.TextInput(label="Nom de votre entreprise / marque")
-    adresse_emetteur = discord.ui.TextInput(label="Votre adresse (optionnel)", required=False, placeholder="1 rue de la Paix, 75001 Paris")
-    prenom          = discord.ui.TextInput(label="Prénom du client")
-    nom             = discord.ui.TextInput(label="Nom du client")
-    email           = discord.ui.TextInput(label="Email client (pour recevoir la facture)", placeholder="client@email.com")
+    marque   = discord.ui.TextInput(label="Votre entreprise / marque")
+    siret    = discord.ui.TextInput(label="SIRET + N° TVA (optionnel)", required=False, placeholder="Ex: 123 456 789 00012 — FR12 123456789")
+    client   = discord.ui.TextInput(label="Prénom NOM du client", placeholder="Jean DUPONT")
+    email    = discord.ui.TextInput(label="Email client", placeholder="client@email.com")
+    adresse  = discord.ui.TextInput(label="Votre adresse (optionnel)", required=False, placeholder="1 rue de la Paix, 75001 Paris")
 
     async def on_submit(self, interaction: discord.Interaction):
         uid = interaction.user.id
+        parts = self.client.value.strip().split(" ", 1)
+        prenom = parts[0]
+        nom = parts[1] if len(parts) > 1 else ""
+
+        siret_raw = self.siret.value or ""
+        siret_val = ""
+        tva_intra = ""
+        if "—" in siret_raw:
+            sp = siret_raw.split("—", 1)
+            siret_val = sp[0].strip()
+            tva_intra = sp[1].strip()
+        elif siret_raw:
+            siret_val = siret_raw.strip()
+
         sessions[uid] = {
             "type": "facture",
             "marque": self.marque.value,
-            "adresse_emetteur": self.adresse_emetteur.value or "",
-            "prenom": self.prenom.value,
-            "nom": self.nom.value,
+            "adresse_emetteur": self.adresse.value or "",
+            "siret": siret_val,
+            "tva_intra": tva_intra,
+            "prenom": prenom,
+            "nom": nom,
             "email": self.email.value,
+            "paiement": "Virement bancaire",
             "tva": 20.0,
             "articles": [],
             "numero": f"FAC-{gen_numero()}",
             "echeance": "30 jours",
             "adresse_client": "",
-            "siret_client": "",
-            "mentions": "Paiement à réception. Tout retard entraîne des pénalités de 3× le taux légal.",
         }
         await interaction.response.send_message(
-            f"✅ Facture créée pour **{self.prenom.value} {self.nom.value}** "
-            f"— entreprise **{self.marque.value}**.\n\nAjoute maintenant tes articles / prestations :",
+            f"✅ Facture pour **{self.client.value}** — entreprise **{self.marque.value}**\n\n"
+            f"Ajoute maintenant les articles / prestations :",
             view=ViewArticles("facture"),
             ephemeral=True,
         )
@@ -486,6 +681,27 @@ class ViewArticles(discord.ui.View):
 
 
 # ─────────────────────────────────────────
+#  SÉLECTION DU STYLE DE TICKET
+# ─────────────────────────────────────────
+
+class ViewStyleTicket(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=120)
+
+    @discord.ui.button(label="💎 Luxe", style=discord.ButtonStyle.secondary)
+    async def luxe(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(ModalInfosTicket("luxe"))
+
+    @discord.ui.button(label="🛍️ Standard", style=discord.ButtonStyle.primary)
+    async def standard(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(ModalInfosTicket("standard"))
+
+    @discord.ui.button(label="🍔 Restaurant / Supermarché", style=discord.ButtonStyle.secondary)
+    async def restaurant(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(ModalInfosTicket("restaurant"))
+
+
+# ─────────────────────────────────────────
 #  VUE PRINCIPALE
 # ─────────────────────────────────────────
 
@@ -495,7 +711,14 @@ class ViewChoix(discord.ui.View):
 
     @discord.ui.button(label="🧾 Ticket de caisse", style=discord.ButtonStyle.primary, custom_id="btn_ticket")
     async def ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(ModalInfosTicket())
+        await interaction.response.send_message(
+            "**Quel style de ticket ?**\n\n"
+            "💎 **Luxe** — LV, Chanel, Dior, Hermès…\n"
+            "🛍️ **Standard** — Zara, Nike, Sephora, H&M…\n"
+            "🍔 **Restaurant / Supermarché** — McDonald's, Carrefour, Lidl…",
+            view=ViewStyleTicket(),
+            ephemeral=True,
+        )
 
     @discord.ui.button(label="📄 Facture", style=discord.ButtonStyle.secondary, custom_id="btn_facture")
     async def facture(self, interaction: discord.Interaction, button: discord.ui.Button):
