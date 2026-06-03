@@ -21,6 +21,8 @@ from reportlab.graphics.barcode import code128
 
 def _load_env(path=".env"):
     if not os.path.exists(path):
+        path = ".env.example"
+    if not os.path.exists(path):
         return
     with open(path, "r", encoding="utf-8-sig") as f:
         for line in f:
