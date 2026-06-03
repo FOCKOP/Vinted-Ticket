@@ -120,10 +120,14 @@ def generer_ticket(data: dict) -> bytes:
     s = TICKET_STYLES.get(style_key, TICKET_STYLES["standard"])
 
     W_PAGE = 8 * cm
+    n_art = len(data["articles"])
+    extra_addr = len(data["adresse"].split(",")) * 0.4 if data.get("adresse") else 0.0
+    page_h = (14.5 + 1.2 * n_art + extra_addr) * cm
+
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
         buf,
-        pagesize=(W_PAGE, 30 * cm),
+        pagesize=(W_PAGE, page_h),
         rightMargin=0.5 * cm,
         leftMargin=0.5 * cm,
         topMargin=0.6 * cm,
