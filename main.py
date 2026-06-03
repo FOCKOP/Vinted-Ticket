@@ -653,20 +653,42 @@ class ModalInfosTicket(discord.ui.Modal, title="Informations — Ticket de caiss
         )
 
 
-class ModalInfosFacture(discord.ui.Modal, title="Informations — Facture"):
-    marque   = discord.ui.TextInput(label="Votre entreprise / marque")
-    siret    = discord.ui.TextInput(label="SIRET + N° TVA (optionnel)", required=False, placeholder="Ex: 123 456 789 00012 — FR12 123456789")
+class ModalInfosFacture1(discord.ui.Modal, title="Facture — Étape 1/2 · Émetteur & Client"):
+    marque   = discord.ui.TextInput(label="Votre entreprise / marque", placeholder="Ex: ACME SAS")
+    adresse  = discord.ui.TextInput(label="Votre adresse", required=False, placeholder="1 rue de la Paix, 75001 Paris")
+    siret    = discord.ui.TextInput(label="SIRET — N° TVA intracommunautaire", required=False, placeholder="123 456 789 00012 — FR12 123456789")
     client   = discord.ui.TextInput(label="Prénom NOM du client", placeholder="Jean DUPONT")
-    email    = discord.ui.TextInput(label="Email client", placeholder="client@email.com")
-    adresse  = discord.ui.TextInput(label="Votre adresse (optionnel)", required=False, placeholder="1 rue de la Paix, 75001 Paris")
+    email    = discord.ui.TextInput(label="Email du client", placeholder="client@email.com")
 
     async def on_submit(self, interaction: discord.Interaction):
         uid = interaction.user.id
-        parts = self.client.value.strip().split(" ", 1)
+        sessions[uid] = {
+            "_step1": True,
+            "marque": self.marque.value,
+            "adresse_emetteur": self.adresse.value or "",
+            "siret_raw": self.siret.value or "",
+            "client_full": self.client.value.strip(),
+            "email": self.email.value,
+        }
+        await interaction.response.send_modal(ModalInfosFacture2())
+
+
+class ModalInfosFacture2(discord.ui.Modal, title="Facture — Étape 2/2 · Paiement & Coordonnées"):
+    adresse_client = discord.ui.TextInput(label="Adresse du client", required=False, placeholder="10 avenue Victor Hugo, 69001 Lyon")
+    paiement       = discord.ui.TextInput(label="Mode de règlement", placeholder="Virement bancaire / Chèque / CB", default="Virement bancaire")
+    echeance       = discord.ui.TextInput(label="Délai de paiement", placeholder="30 jours / À réception / 15 jours", default="30 jours")
+    iban           = discord.ui.TextInput(label="IBAN (optionnel)", required=False, placeholder="FR76 3000 6000 0112 3456 7890 189")
+    bic            = discord.ui.TextInput(label="BIC / SWIFT (optionnel)", required=False, placeholder="BNPAFRPPXXX")
+
+    async def on_submit(self, interaction: discord.Interaction):
+        uid = interaction.user.id
+        step1 = sessions.get(uid, {})
+
+        parts = step1.get("client_full", "").split(" ", 1)
         prenom = parts[0]
         nom = parts[1] if len(parts) > 1 else ""
 
-        siret_raw = self.siret.value or ""
+        siret_raw = step1.get("siret_raw", "")
         siret_val = ""
         tva_intra = ""
         if "—" in siret_raw:
@@ -678,22 +700,26 @@ class ModalInfosFacture(discord.ui.Modal, title="Informations — Facture"):
 
         sessions[uid] = {
             "type": "facture",
-            "marque": self.marque.value,
-            "adresse_emetteur": self.adresse.value or "",
+            "marque": step1.get("marque", ""),
+            "adresse_emetteur": step1.get("adresse_emetteur", ""),
             "siret": siret_val,
             "tva_intra": tva_intra,
             "prenom": prenom,
             "nom": nom,
-            "email": self.email.value,
-            "paiement": "Virement bancaire",
+            "email": step1.get("email", ""),
+            "adresse_client": self.adresse_client.value or "",
+            "paiement": self.paiement.value or "Virement bancaire",
+            "echeance": self.echeance.value or "30 jours",
+            "iban": self.iban.value or "",
+            "bic": self.bic.value or "",
             "tva": 20.0,
             "articles": [],
             "numero": f"FAC-{gen_numero()}",
-            "echeance": "30 jours",
-            "adresse_client": "",
         }
+        client_full = step1.get("client_full", "")
+        marque = step1.get("marque", "")
         await interaction.response.send_message(
-            f"✅ Facture pour **{self.client.value}** — entreprise **{self.marque.value}**\n\n"
+            f"✅ Facture pour **{client_full}** — entreprise **{marque}**\n\n"
             f"Ajoute maintenant les articles / prestations :",
             view=ViewArticles("facture"),
             ephemeral=True,
@@ -829,7 +855,7 @@ class ViewChoix(discord.ui.View):
 
     @discord.ui.button(label="📄 Facture", style=discord.ButtonStyle.secondary, custom_id="btn_facture")
     async def facture(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(ModalInfosFacture())
+        await interaction.response.send_modal(ModalInfosFacture1())
 
 
 # ─────────────────────────────────────────
