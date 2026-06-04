@@ -18,6 +18,9 @@ from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, 
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER, TA_RIGHT, TA_LEFT
 from reportlab.graphics.barcode import code128
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+import urllib.request
 
 def _load_env(path=".env"):
     if not os.path.exists(path):
@@ -33,6 +36,34 @@ def _load_env(path=".env"):
             os.environ.setdefault(key.strip(), value.strip())
 
 _load_env()
+
+# ─────────────────────────────────────────
+#  POLICES PERSONNALISÉES
+# ─────────────────────────────────────────
+_FONTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
+_FONT_URLS = {
+    "Cinzel-Bold":      "https://raw.githubusercontent.com/google/fonts/main/ofl/cinzel/Cinzel[wght].ttf",
+    "Montserrat-Bold":  "https://raw.githubusercontent.com/google/fonts/main/ofl/montserrat/Montserrat[wght].ttf",
+    "Oswald-Bold":      "https://raw.githubusercontent.com/google/fonts/main/ofl/oswald/Oswald[wght].ttf",
+}
+
+def _ensure_fonts():
+    os.makedirs(_FONTS_DIR, exist_ok=True)
+    for name, url in _FONT_URLS.items():
+        path = os.path.join(_FONTS_DIR, f"{name}.ttf")
+        if not os.path.exists(path):
+            try:
+                urllib.request.urlretrieve(url, path)
+                print(f"[FONT] Downloaded {name}")
+            except Exception as e:
+                print(f"[FONT] Could not download {name}: {e}")
+                continue
+        try:
+            pdfmetrics.registerFont(TTFont(name, path))
+        except Exception as e:
+            print(f"[FONT] Could not register {name}: {e}")
+
+_ensure_fonts()
 
 # ─────────────────────────────────────────
 #  CONFIGURATION
@@ -91,22 +122,25 @@ def envoyer_email(destinataire: str, sujet: str, corps: str, pdf_bytes: bytes, n
 # ─────────────────────────────────────────
 TICKET_STYLES = {
     "luxe": {
-        "label":       "💎 Luxe (LV, Chanel, Dior…)",
-        "header_font": "Times-Bold",
-        "header_sz":   22,
-        "spacing":     True,
+        "label":            "💎 Luxe (LV, Chanel, Dior…)",
+        "header_font":      "Cinzel-Bold",
+        "header_fallback":  "Times-Bold",
+        "header_sz":        22,
+        "spacing":          True,
     },
     "standard": {
-        "label":       "🛍️ Standard (Zara, Nike, Sephora…)",
-        "header_font": "Helvetica-Bold",
-        "header_sz":   18,
-        "spacing":     False,
+        "label":            "🛍️ Standard (Zara, Nike, Sephora…)",
+        "header_font":      "Montserrat-Bold",
+        "header_fallback":  "Helvetica-Bold",
+        "header_sz":        18,
+        "spacing":          False,
     },
     "restaurant": {
-        "label":       "🍔 Restaurant / Supermarché",
-        "header_font": "Courier-Bold",
-        "header_sz":   14,
-        "spacing":     False,
+        "label":            "🍔 Restaurant / Supermarché",
+        "header_font":      "Oswald-Bold",
+        "header_fallback":  "Courier-Bold",
+        "header_sz":        16,
+        "spacing":          False,
     },
 }
 
@@ -115,7 +149,23 @@ TICKET_STYLES = {
 #  GÉNÉRATION PDF — TICKET DE CAISSE
 # ─────────────────────────────────────────
 def _spaced(text: str) -> str:
-    return "  ".join(text.upper())
+    words = text.upper().split()
+    return "   ".join(" ".join(w) for w in words)
+
+def _header_sz(nom: str, max_sz: int, w_pt: float) -> int:
+    parts = nom.split()
+    longest = max(len(p) for p in parts) if parts else len(nom)
+    for sz in range(max_sz, 8, -1):
+        if longest * sz * 0.56 <= w_pt:
+            return sz
+    return 8
+
+def _font(preferred: str, fallback: str) -> str:
+    try:
+        pdfmetrics.getFont(preferred)
+        return preferred
+    except Exception:
+        return fallback
 
 def generer_ticket(data: dict) -> bytes:
     style_key = data.get("style", "standard")
@@ -153,7 +203,9 @@ def generer_ticket(data: dict) -> bytes:
 
     # ── NOM DE MARQUE ───────────────────────
     nom = _spaced(data["marque"]) if s["spacing"] else data["marque"].upper()
-    elems.append(p(nom, font=s["header_font"], size=s["header_sz"], align=TA_CENTER))
+    hfont = _font(s["header_font"], s.get("header_fallback", "Helvetica-Bold"))
+    hsz = _header_sz(nom, s["header_sz"], W) if s["spacing"] else s["header_sz"]
+    elems.append(p(nom, font=hfont, size=hsz, align=TA_CENTER))
     elems.append(Spacer(1, 3))
     if data.get("adresse"):
         for ligne in data["adresse"].split(","):
@@ -284,7 +336,7 @@ def generer_ticket(data: dict) -> bytes:
 def generer_facture(data: dict) -> bytes:
     n_art  = len(data["articles"])
     W_PAGE = A4[0]
-    page_h = max((18 + 1.1 * n_art) * cm, 25 * cm)
+    page_h = max((22 + 1.5 * n_art) * cm, A4[1])
 
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
@@ -534,24 +586,50 @@ def generer_facture(data: dict) -> bytes:
     elems.append(HRFlowable(width="100%", thickness=0.5, color=LN))
     elems.append(Spacer(1, 8))
 
-    pay_left = [
+    pw, nw = W * 0.58, W * 0.42
+    pay_rows = [
         [Paragraph("INFORMATIONS DE PAIEMENT", st("Helvetica-Bold", 7, color=LG))],
         [Spacer(1, 3)],
         [Paragraph(mode, st("Helvetica-Bold", 9))],
     ]
     if mode.lower() in ("virement", "virement bancaire"):
-        pay_left.append([Paragraph(f"À l'ordre de : {data['marque']}", st(size=8.5, color=GR))])
+        pay_rows.append([Paragraph(f"À l'ordre de : {data['marque']}", st(size=8.5, color=GR))])
     if iban:
-        pay_left.append([Paragraph(f"IBAN : {iban}", st(size=8.5, color=GR))])
+        pay_rows.append([Paragraph(f"IBAN : {iban}", st(size=8.5, color=GR))])
     if bic:
-        pay_left.append([Paragraph(f"BIC / SWIFT : {bic}", st(size=8.5, color=GR))])
+        pay_rows.append([Paragraph(f"BIC / SWIFT : {bic}", st(size=8.5, color=GR))])
 
-    pay_tbl = Table(pay_left, colWidths=[W * 0.60])
-    pay_tbl.setStyle(TableStyle([
+    pay_left_tbl = Table(pay_rows, colWidths=[pw])
+    pay_left_tbl.setStyle(TableStyle([
         ("TOPPADDING",(0,0),(-1,-1),2), ("BOTTOMPADDING",(0,0),(-1,-1),2),
         ("LEFTPADDING",(0,0),(-1,-1),0), ("RIGHTPADDING",(0,0),(-1,-1),0),
     ]))
-    elems.append(pay_tbl)
+
+    net_data = [
+        [Paragraph("NET À RÉGLER", st("Helvetica-Bold", 7, TA_CENTER, color=LG))],
+        [Paragraph(f"{total_ttc:.2f} €", st("Helvetica-Bold", 18, TA_CENTER, color=DARK))],
+    ]
+    net_box = Table(net_data, colWidths=[nw])
+    net_box.setStyle(TableStyle([
+        ("BOX",           (0,0),(-1,-1), 0.5, LN),
+        ("LINEABOVE",     (0,0),(-1,0),  2.5, DARK),
+        ("TOPPADDING",    (0,0),(-1,-1), 10),
+        ("BOTTOMPADDING", (0,0),(-1,-1), 10),
+        ("LEFTPADDING",   (0,0),(-1,-1), 8),
+        ("RIGHTPADDING",  (0,0),(-1,-1), 8),
+        ("ALIGN",         (0,0),(-1,-1), "CENTER"),
+        ("VALIGN",        (0,0),(-1,-1), "MIDDLE"),
+    ]))
+
+    footer_tbl = Table([[pay_left_tbl, net_box]], colWidths=[pw, nw])
+    footer_tbl.setStyle(TableStyle([
+        ("VALIGN",        (0,0),(-1,-1), "MIDDLE"),
+        ("TOPPADDING",    (0,0),(-1,-1), 0),
+        ("BOTTOMPADDING", (0,0),(-1,-1), 0),
+        ("LEFTPADDING",   (0,0),(-1,-1), 0),
+        ("RIGHTPADDING",  (0,0),(-1,-1), 0),
+    ]))
+    elems.append(footer_tbl)
     elems.append(Spacer(1, 10))
 
     mentions = (
