@@ -346,15 +346,14 @@ def generer_facture(data: dict) -> bytes:
     )
     W = W_PAGE - 4.0 * cm
 
-    DARK = colors.HexColor("#1C2B3A")
+    # Style de marque (même système que les tickets)
+    style_key = data.get("style", "standard")
+    s = TICKET_STYLES.get(style_key, TICKET_STYLES["standard"])
+
     BK   = colors.black
-    WH   = colors.white
     GR   = colors.HexColor("#444444")
-    LG   = colors.HexColor("#777777")
-    LN   = colors.HexColor("#E0E0E0")
-    AROW = colors.HexColor("#F8F9FA")
-    BGREF= colors.HexColor("#EEF2F6")
-    GDIM = colors.HexColor("#B0BEC5")
+    LG   = colors.HexColor("#888888")
+    DOT  = (2, 3)   # pointillés style cahier : 2pt on / 3pt off
 
     _c = [0]
     def st(font="Helvetica", size=8.5, align=TA_LEFT, color=colors.black, leading=None):
@@ -362,6 +361,23 @@ def generer_facture(data: dict) -> bytes:
         return ParagraphStyle(f"s{_c[0]}", fontName=font, fontSize=size,
                                alignment=align, textColor=color,
                                leading=leading or size * 1.35)
+
+    def dot_box(inner, cw):
+        t = Table([[inner]], colWidths=[cw])
+        t.setStyle(TableStyle([
+            ("BOX",(0,0),(-1,-1),0.6,BK,0,DOT),
+            ("TOPPADDING",(0,0),(-1,-1),10),("BOTTOMPADDING",(0,0),(-1,-1),12),
+            ("LEFTPADDING",(0,0),(-1,-1),10),("RIGHTPADDING",(0,0),(-1,-1),10),
+        ]))
+        return t
+
+    def inner_rows(rows, cw):
+        t = Table(rows, colWidths=[cw])
+        t.setStyle(TableStyle([
+            ("TOPPADDING",(0,0),(-1,-1),1.5),("BOTTOMPADDING",(0,0),(-1,-1),1.5),
+            ("LEFTPADDING",(0,0),(-1,-1),0),("RIGHTPADDING",(0,0),(-1,-1),0),
+        ]))
+        return t
 
     now       = datetime.now()
     numero    = data["numero"]
@@ -375,53 +391,36 @@ def generer_facture(data: dict) -> bytes:
     bic       = data.get("bic", "")
     elems     = []
 
-    # ── 1. BANDEAU EN-TÊTE ────────────────────────────────────────
+    # ── 1. EN-TÊTE : nom de marque (police brand) + FACTURE ──────
     lw, rw = W * 0.60, W * 0.40
+    hfont = _font(s["header_font"], s.get("header_fallback", "Helvetica-Bold"))
+    nom_marque = _spaced(data["marque"]) if s["spacing"] else data["marque"].upper()
+    hsz = _header_sz(nom_marque, s["header_sz"], lw) if s["spacing"] else s["header_sz"]
 
-    em_lines = [[Paragraph(data["marque"].upper(),
-                            st("Helvetica-Bold", 17, color=WH))]]
-    if adr_em:
-        for line in adr_em.split(","):
-            em_lines.append([Paragraph(line.strip(), st(size=8, color=GDIM))])
-
-    em_tbl = Table(em_lines, colWidths=[lw - 14])
-    em_tbl.setStyle(TableStyle([
-        ("TOPPADDING",(0,0),(-1,-1),1.5), ("BOTTOMPADDING",(0,0),(-1,-1),1.5),
-        ("LEFTPADDING",(0,0),(-1,-1),0),  ("RIGHTPADDING",(0,0),(-1,-1),0),
+    hdr = Table([[
+        Paragraph(nom_marque, st(hfont, hsz)),
+        Paragraph("FACTURE", st("Helvetica-Bold", 28, TA_RIGHT)),
+    ]], colWidths=[lw, rw])
+    hdr.setStyle(TableStyle([
+        ("VALIGN",(0,0),(-1,-1),"BOTTOM"),
+        ("TOPPADDING",(0,0),(-1,-1),0),("BOTTOMPADDING",(0,0),(-1,-1),4),
+        ("LEFTPADDING",(0,0),(-1,-1),0),("RIGHTPADDING",(0,0),(-1,-1),0),
     ]))
-
-    fac_lines = [
-        [Paragraph("FACTURE", st("Helvetica-Bold", 30, TA_RIGHT, color=WH))],
-        [Paragraph(f"N° {numero}", st(size=9.5, align=TA_RIGHT, color=GDIM))],
-    ]
-    fac_tbl = Table(fac_lines, colWidths=[rw - 14])
-    fac_tbl.setStyle(TableStyle([
-        ("TOPPADDING",(0,0),(-1,-1),2), ("BOTTOMPADDING",(0,0),(-1,-1),2),
-        ("LEFTPADDING",(0,0),(-1,-1),0), ("RIGHTPADDING",(0,0),(-1,-1),0),
-    ]))
-
-    hdr_tbl = Table([[em_tbl, fac_tbl]], colWidths=[lw, rw])
-    hdr_tbl.setStyle(TableStyle([
-        ("BACKGROUND",    (0,0),(-1,-1), DARK),
-        ("VALIGN",        (0,0),(-1,-1), "MIDDLE"),
-        ("TOPPADDING",    (0,0),(-1,-1), 18),
-        ("BOTTOMPADDING", (0,0),(-1,-1), 18),
-        ("LEFTPADDING",   (0,0),(0,-1),  14),
-        ("RIGHTPADDING",  (0,0),(0,-1),  0),
-        ("LEFTPADDING",   (1,0),(1,-1),  0),
-        ("RIGHTPADDING",  (1,0),(1,-1),  14),
-    ]))
-    elems.append(hdr_tbl)
+    elems.append(hdr)
+    elems.append(Spacer(1, 2))
+    elems.append(Paragraph(f"N° {numero}", st(size=8.5, align=TA_RIGHT, color=LG)))
+    elems.append(HRFlowable(width="100%", thickness=1, color=BK))
     elems.append(Spacer(1, 12))
 
-    # ── 2. ÉMETTEUR  |  FACTURÉ À ────────────────────────────────
+    # ── 2. ÉMETTEUR  |  FACTURÉ À (encadrés en pointillés) ───────
     cl_name = f"{data['prenom']} {data['nom'].upper()}"
     bw, gap_w, dw = W * 0.46, W * 0.08, W * 0.46
 
-    # Left: sender
-    de_rows = [[Paragraph("ÉMETTEUR", st("Helvetica-Bold", 7, color=LG))],
-               [Spacer(1, 4)],
-               [Paragraph(data["marque"], st("Helvetica-Bold", 9.5))]]
+    de_rows = [
+        [Paragraph("ÉMETTEUR", st("Helvetica-Bold", 7, color=LG))],
+        [Spacer(1, 4)],
+        [Paragraph(data["marque"], st("Helvetica-Bold", 9.5))],
+    ]
     if adr_em:
         for line in adr_em.split(","):
             de_rows.append([Paragraph(line.strip(), st(size=8.5, color=GR))])
@@ -430,74 +429,41 @@ def generer_facture(data: dict) -> bytes:
     if tva_intra:
         de_rows.append([Paragraph(f"N° TVA : {tva_intra}", st(size=8, color=LG))])
 
-    de_inner = Table(de_rows, colWidths=[bw - 22])
-    de_inner.setStyle(TableStyle([
-        ("TOPPADDING",(0,0),(-1,-1),1.5), ("BOTTOMPADDING",(0,0),(-1,-1),1.5),
-        ("LEFTPADDING",(0,0),(-1,-1),0),  ("RIGHTPADDING",(0,0),(-1,-1),0),
-    ]))
-
-    # Right: client
-    fa_rows = [[Paragraph("FACTURÉ À", st("Helvetica-Bold", 7, color=LG))],
-               [Spacer(1, 4)],
-               [Paragraph(cl_name, st("Helvetica-Bold", 10))]]
+    fa_rows = [
+        [Paragraph("FACTURÉ À", st("Helvetica-Bold", 7, color=LG))],
+        [Spacer(1, 4)],
+        [Paragraph(cl_name, st("Helvetica-Bold", 10))],
+    ]
     if data.get("adresse_client"):
         fa_rows.append([Paragraph(data["adresse_client"], st(size=8.5, color=GR))])
     if data.get("email"):
         fa_rows.append([Paragraph(data["email"], st(size=8.5, color=GR))])
 
-    fa_inner = Table(fa_rows, colWidths=[dw - 22])
-    fa_inner.setStyle(TableStyle([
-        ("TOPPADDING",(0,0),(-1,-1),1.5), ("BOTTOMPADDING",(0,0),(-1,-1),1.5),
-        ("LEFTPADDING",(0,0),(-1,-1),0),  ("RIGHTPADDING",(0,0),(-1,-1),0),
-    ]))
-
-    addr_tbl = Table([[de_inner, "", fa_inner]], colWidths=[bw, gap_w, dw])
+    addr_tbl = Table([
+        [dot_box(inner_rows(de_rows, bw-20), bw), "", dot_box(inner_rows(fa_rows, dw-20), dw)]
+    ], colWidths=[bw, gap_w, dw])
     addr_tbl.setStyle(TableStyle([
-        ("VALIGN",        (0,0),(-1,-1), "TOP"),
-        ("BOX",           (0,0),(0,-1),  0.5, LN),
-        ("LINEABOVE",     (0,0),(0,-1),  2.5, DARK),
-        ("TOPPADDING",    (0,0),(0,-1),  10),
-        ("BOTTOMPADDING", (0,0),(0,-1),  12),
-        ("LEFTPADDING",   (0,0),(0,-1),  10),
-        ("RIGHTPADDING",  (0,0),(0,-1),  10),
-        ("TOPPADDING",    (1,0),(1,-1),  0),
-        ("BOTTOMPADDING", (1,0),(1,-1),  0),
-        ("LEFTPADDING",   (1,0),(1,-1),  0),
-        ("RIGHTPADDING",  (1,0),(1,-1),  0),
-        ("BOX",           (2,0),(2,-1),  0.5, LN),
-        ("LINEABOVE",     (2,0),(2,-1),  2.5, DARK),
-        ("TOPPADDING",    (2,0),(2,-1),  10),
-        ("BOTTOMPADDING", (2,0),(2,-1),  12),
-        ("LEFTPADDING",   (2,0),(2,-1),  10),
-        ("RIGHTPADDING",  (2,0),(2,-1),  10),
+        ("VALIGN",(0,0),(-1,-1),"TOP"),
+        ("TOPPADDING",(0,0),(-1,-1),0),("BOTTOMPADDING",(0,0),(-1,-1),0),
+        ("LEFTPADDING",(0,0),(-1,-1),0),("RIGHTPADDING",(0,0),(-1,-1),0),
     ]))
     elems.append(addr_tbl)
     elems.append(Spacer(1, 10))
 
-    # ── 3. BARRE DE RÉFÉRENCE ─────────────────────────────────────
+    # ── 3. BARRE DE RÉFÉRENCE (pointillés) ───────────────────────
     ref_cw = [W*0.22, W*0.22, W*0.22, W*0.34]
-    ref_labels = [
-        Paragraph("N° DE FACTURE",     st("Helvetica-Bold", 7, color=LG)),
-        Paragraph("DATE D'ÉMISSION",   st("Helvetica-Bold", 7, color=LG)),
-        Paragraph("DATE D'ÉCHÉANCE",   st("Helvetica-Bold", 7, color=LG)),
-        Paragraph("MODE DE RÈGLEMENT", st("Helvetica-Bold", 7, color=LG)),
-    ]
-    ref_values = [
-        Paragraph(numero,   st("Helvetica-Bold", 9)),
-        Paragraph(date_str, st("Helvetica-Bold", 9)),
-        Paragraph(echeance, st("Helvetica-Bold", 9)),
-        Paragraph(mode,     st("Helvetica-Bold", 9)),
-    ]
-    ref_tbl = Table([ref_labels, ref_values], colWidths=ref_cw)
+    ref_tbl = Table([
+        [Paragraph(t, st("Helvetica-Bold", 7, color=LG)) for t in
+         ["N° DE FACTURE", "DATE D'ÉMISSION", "DATE D'ÉCHÉANCE", "MODE DE RÈGLEMENT"]],
+        [Paragraph(v, st("Helvetica-Bold", 9)) for v in
+         [numero, date_str, echeance, mode]],
+    ], colWidths=ref_cw)
     ref_tbl.setStyle(TableStyle([
-        ("BACKGROUND",    (0,0),(-1,-1), BGREF),
-        ("TOPPADDING",    (0,0),(-1,-1), 6),
-        ("BOTTOMPADDING", (0,0),(-1,-1), 6),
-        ("LEFTPADDING",   (0,0),(-1,-1), 8),
-        ("RIGHTPADDING",  (0,0),(-1,-1), 8),
-        ("BOX",           (0,0),(-1,-1), 0.5, LN),
-        ("LINEBELOW",     (0,0),(-1,0),  0.25, LN),
-        ("LINEBEFORE",    (1,0),(3,-1),  0.25, LN),
+        ("BOX",(0,0),(-1,-1),0.6,BK,0,DOT),
+        ("LINEBEFORE",(1,0),(3,-1),0.5,BK,0,DOT),
+        ("LINEBELOW",(0,0),(-1,0),0.4,BK,0,DOT),
+        ("TOPPADDING",(0,0),(-1,-1),7),("BOTTOMPADDING",(0,0),(-1,-1),7),
+        ("LEFTPADDING",(0,0),(-1,-1),8),("RIGHTPADDING",(0,0),(-1,-1),8),
     ]))
     elems.append(ref_tbl)
     elems.append(Spacer(1, 14))
@@ -522,26 +488,19 @@ def generer_facture(data: dict) -> bytes:
                          f"{tr:.0f}%", f"{lht:.2f} €", f"{lttc:.2f} €"])
 
     cw = [W*0.34, W*0.07, W*0.14, W*0.09, W*0.18, W*0.18]
-    art_style = TableStyle([
-        ("BACKGROUND",    (0,0),(-1,0),  DARK),
-        ("TEXTCOLOR",     (0,0),(-1,0),  WH),
-        ("FONTNAME",      (0,0),(-1,0),  "Helvetica-Bold"),
-        ("FONTNAME",      (0,1),(-1,-1), "Helvetica"),
-        ("FONTSIZE",      (0,0),(-1,-1), 8.5),
-        ("ALIGN",         (0,0),(0,-1),  "LEFT"),
-        ("ALIGN",         (1,0),(-1,-1), "RIGHT"),
-        ("TOPPADDING",    (0,0),(-1,-1), 7),
-        ("BOTTOMPADDING", (0,0),(-1,-1), 7),
-        ("LEFTPADDING",   (0,0),(0,-1),  8),
-        ("RIGHTPADDING",  (-1,0),(-1,-1), 8),
-        ("BOX",           (0,0),(-1,-1), 0.5, LN),
-        ("LINEBELOW",     (0,1),(-1,-1), 0.25, LN),
-    ])
-    for i in range(2, len(art_rows), 2):
-        art_style.add("BACKGROUND", (0, i), (-1, i), AROW)
-
     art_tbl = Table(art_rows, colWidths=cw, repeatRows=1)
-    art_tbl.setStyle(art_style)
+    art_tbl.setStyle(TableStyle([
+        ("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),
+        ("FONTNAME",(0,1),(-1,-1),"Helvetica"),
+        ("FONTSIZE",(0,0),(-1,-1),8.5),
+        ("ALIGN",(0,0),(0,-1),"LEFT"),
+        ("ALIGN",(1,0),(-1,-1),"RIGHT"),
+        ("TOPPADDING",(0,0),(-1,-1),6),("BOTTOMPADDING",(0,0),(-1,-1),6),
+        ("LEFTPADDING",(0,0),(0,-1),8),("RIGHTPADDING",(-1,0),(-1,-1),8),
+        ("BOX",(0,0),(-1,-1),0.6,BK,0,DOT),
+        ("INNERGRID",(0,0),(-1,-1),0.4,BK,0,DOT),
+        ("LINEBELOW",(0,0),(-1,0),1.0,BK),
+    ]))
     elems.append(art_tbl)
     elems.append(Spacer(1, 12))
 
@@ -550,40 +509,40 @@ def generer_facture(data: dict) -> bytes:
     lc = tw * 0.58
     vc = tw * 0.42
 
-    def tr_row(label, value, bold=False, hi=False):
-        fn = "Helvetica-Bold" if bold else "Helvetica"
-        sz = 9.5 if bold else 8.5
-        tc = WH if hi else (BK if bold else GR)
-        return [Paragraph(label, st(fn, sz, color=tc)),
-                Paragraph(value, st(fn, sz, TA_RIGHT, color=tc))]
-
-    tot_data = [tr_row("Sous-total HT", f"{total_ht:.2f} €")]
+    tot_data = [
+        [Paragraph("Sous-total HT", st(size=8.5, color=GR)),
+         Paragraph(f"{total_ht:.2f} €", st(size=8.5, align=TA_RIGHT, color=GR))],
+    ]
     for taux, mnt in sorted(tva_details.items()):
-        tot_data.append(tr_row(f"TVA {taux:.0f}%", f"{mnt:.2f} €"))
-    tot_data.append(tr_row("TOTAL TTC", f"{total_ttc:.2f} €", bold=True, hi=True))
+        tot_data.append([
+            Paragraph(f"TVA {taux:.0f}%", st(size=8.5, color=GR)),
+            Paragraph(f"{mnt:.2f} €", st(size=8.5, align=TA_RIGHT, color=GR)),
+        ])
+    tot_data.append([
+        Paragraph("TOTAL TTC", st("Helvetica-Bold", 10)),
+        Paragraph(f"{total_ttc:.2f} €", st("Helvetica-Bold", 10, TA_RIGHT)),
+    ])
 
     tot_tbl = Table(tot_data, colWidths=[lc, vc])
     tot_tbl.setStyle(TableStyle([
-        ("TOPPADDING",    (0,0),(-1,-1), 6),
-        ("BOTTOMPADDING", (0,0),(-1,-1), 6),
-        ("LEFTPADDING",   (0,0),(-1,-1), 8),
-        ("RIGHTPADDING",  (0,0),(-1,-1), 8),
-        ("BOX",           (0,0),(-1,-1), 0.5, LN),
-        ("LINEBELOW",     (0,0),(-1,-2), 0.25, LN),
-        ("BACKGROUND",    (0,-1),(-1,-1), DARK),
+        ("BOX",(0,0),(-1,-1),0.6,BK,0,DOT),
+        ("LINEBELOW",(0,0),(-1,-2),0.4,BK,0,DOT),
+        ("LINEABOVE",(0,-1),(-1,-1),1.0,BK),
+        ("TOPPADDING",(0,0),(-1,-1),6),("BOTTOMPADDING",(0,0),(-1,-1),6),
+        ("LEFTPADDING",(0,0),(-1,-1),8),("RIGHTPADDING",(0,0),(-1,-1),8),
     ]))
 
     totals_wrap = Table([["", tot_tbl]], colWidths=[W - tw, tw])
     totals_wrap.setStyle(TableStyle([
-        ("TOPPADDING",(0,0),(-1,-1),0), ("BOTTOMPADDING",(0,0),(-1,-1),0),
-        ("LEFTPADDING",(0,0),(-1,-1),0), ("RIGHTPADDING",(0,0),(-1,-1),0),
+        ("TOPPADDING",(0,0),(-1,-1),0),("BOTTOMPADDING",(0,0),(-1,-1),0),
+        ("LEFTPADDING",(0,0),(-1,-1),0),("RIGHTPADDING",(0,0),(-1,-1),0),
         ("VALIGN",(0,0),(-1,-1),"TOP"),
     ]))
     elems.append(totals_wrap)
     elems.append(Spacer(1, 20))
 
     # ── 6. PIED DE PAGE ──────────────────────────────────────────
-    elems.append(HRFlowable(width="100%", thickness=0.5, color=LN))
+    elems.append(HRFlowable(width="100%", thickness=0.5, color=BK, dash=DOT))
     elems.append(Spacer(1, 8))
 
     pw, nw = W * 0.58, W * 0.42
@@ -601,33 +560,27 @@ def generer_facture(data: dict) -> bytes:
 
     pay_left_tbl = Table(pay_rows, colWidths=[pw])
     pay_left_tbl.setStyle(TableStyle([
-        ("TOPPADDING",(0,0),(-1,-1),2), ("BOTTOMPADDING",(0,0),(-1,-1),2),
-        ("LEFTPADDING",(0,0),(-1,-1),0), ("RIGHTPADDING",(0,0),(-1,-1),0),
+        ("TOPPADDING",(0,0),(-1,-1),2),("BOTTOMPADDING",(0,0),(-1,-1),2),
+        ("LEFTPADDING",(0,0),(-1,-1),0),("RIGHTPADDING",(0,0),(-1,-1),0),
     ]))
 
-    net_data = [
+    net_box = Table([
         [Paragraph("NET À RÉGLER", st("Helvetica-Bold", 7, TA_CENTER, color=LG))],
-        [Paragraph(f"{total_ttc:.2f} €", st("Helvetica-Bold", 18, TA_CENTER, color=DARK))],
-    ]
-    net_box = Table(net_data, colWidths=[nw])
+        [Paragraph(f"{total_ttc:.2f} €", st("Helvetica-Bold", 18, TA_CENTER))],
+    ], colWidths=[nw])
     net_box.setStyle(TableStyle([
-        ("BOX",           (0,0),(-1,-1), 0.5, LN),
-        ("LINEABOVE",     (0,0),(-1,0),  2.5, DARK),
-        ("TOPPADDING",    (0,0),(-1,-1), 10),
-        ("BOTTOMPADDING", (0,0),(-1,-1), 10),
-        ("LEFTPADDING",   (0,0),(-1,-1), 8),
-        ("RIGHTPADDING",  (0,0),(-1,-1), 8),
-        ("ALIGN",         (0,0),(-1,-1), "CENTER"),
-        ("VALIGN",        (0,0),(-1,-1), "MIDDLE"),
+        ("BOX",(0,0),(-1,-1),0.6,BK,0,DOT),
+        ("LINEABOVE",(0,0),(-1,0),1.5,BK),
+        ("TOPPADDING",(0,0),(-1,-1),10),("BOTTOMPADDING",(0,0),(-1,-1),10),
+        ("LEFTPADDING",(0,0),(-1,-1),8),("RIGHTPADDING",(0,0),(-1,-1),8),
+        ("ALIGN",(0,0),(-1,-1),"CENTER"),("VALIGN",(0,0),(-1,-1),"MIDDLE"),
     ]))
 
     footer_tbl = Table([[pay_left_tbl, net_box]], colWidths=[pw, nw])
     footer_tbl.setStyle(TableStyle([
-        ("VALIGN",        (0,0),(-1,-1), "MIDDLE"),
-        ("TOPPADDING",    (0,0),(-1,-1), 0),
-        ("BOTTOMPADDING", (0,0),(-1,-1), 0),
-        ("LEFTPADDING",   (0,0),(-1,-1), 0),
-        ("RIGHTPADDING",  (0,0),(-1,-1), 0),
+        ("VALIGN",(0,0),(-1,-1),"MIDDLE"),
+        ("TOPPADDING",(0,0),(-1,-1),0),("BOTTOMPADDING",(0,0),(-1,-1),0),
+        ("LEFTPADDING",(0,0),(-1,-1),0),("RIGHTPADDING",(0,0),(-1,-1),0),
     ]))
     elems.append(footer_tbl)
     elems.append(Spacer(1, 10))
@@ -639,6 +592,8 @@ def generer_facture(data: dict) -> bytes:
     if siret:
         info = f"SIRET : {siret}" + (f"  |  N° TVA : {tva_intra}" if tva_intra else "")
         mentions = info + "  —  " + mentions
+    elems.append(HRFlowable(width="100%", thickness=0.4, color=LG, dash=DOT))
+    elems.append(Spacer(1, 5))
     elems.append(Paragraph(mentions, st(size=6.5, color=LG)))
 
     doc.build(elems)
@@ -738,10 +693,15 @@ class ModalInfosFacture1(discord.ui.Modal, title="Facture — Étape 1/2 · Éme
     client   = discord.ui.TextInput(label="Prénom NOM du client", placeholder="Jean DUPONT")
     email    = discord.ui.TextInput(label="Email du client", placeholder="client@email.com")
 
+    def __init__(self, style: str = "standard"):
+        super().__init__()
+        self.style = style
+
     async def on_submit(self, interaction: discord.Interaction):
         uid = interaction.user.id
         sessions[uid] = {
             "_step1": True,
+            "style": self.style,
             "marque": self.marque.value,
             "adresse_emetteur": self.adresse.value or "",
             "siret_raw": self.siret.value or "",
@@ -778,6 +738,7 @@ class ModalInfosFacture2(discord.ui.Modal, title="Facture — Étape 2/2 · Paie
 
         sessions[uid] = {
             "type": "facture",
+            "style": step1.get("style", "standard"),
             "marque": step1.get("marque", ""),
             "adresse_emetteur": step1.get("adresse_emetteur", ""),
             "siret": siret_val,
@@ -913,6 +874,27 @@ class ViewStyleTicket(discord.ui.View):
 
 
 # ─────────────────────────────────────────
+#  SÉLECTION DU STYLE DE FACTURE
+# ─────────────────────────────────────────
+
+class ViewStyleFacture(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=120)
+
+    @discord.ui.button(label="💎 Luxe", style=discord.ButtonStyle.secondary)
+    async def luxe(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(ModalInfosFacture1("luxe"))
+
+    @discord.ui.button(label="🛍️ Standard / Services", style=discord.ButtonStyle.primary)
+    async def standard(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(ModalInfosFacture1("standard"))
+
+    @discord.ui.button(label="🍔 Restaurant / Commerce", style=discord.ButtonStyle.secondary)
+    async def restaurant(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(ModalInfosFacture1("restaurant"))
+
+
+# ─────────────────────────────────────────
 #  VUE PRINCIPALE
 # ─────────────────────────────────────────
 
@@ -933,7 +915,14 @@ class ViewChoix(discord.ui.View):
 
     @discord.ui.button(label="📄 Facture", style=discord.ButtonStyle.secondary, custom_id="btn_facture")
     async def facture(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(ModalInfosFacture1())
+        await interaction.response.send_message(
+            "**Quel style de facture ?**\n\n"
+            "💎 **Luxe** — Maisons de luxe, haute couture (Cinzel)\n"
+            "🛍️ **Standard / Services** — Entreprises, freelances, retail (Montserrat)\n"
+            "🍔 **Restaurant / Commerce** — Restauration, alimentaire (Oswald)",
+            view=ViewStyleFacture(),
+            ephemeral=True,
+        )
 
 
 # ─────────────────────────────────────────
